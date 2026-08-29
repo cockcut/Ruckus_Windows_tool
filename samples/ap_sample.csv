@@ -1,0 +1,4 @@
+sep=,
+current_ip,username,password,new_ip,subnet,gateway,sz_ip,hostname
+172.16.0.1,super,sp-admin,172.16.0.101,255.255.255.0,172.16.0.254,10.0.0.1,AP-Sample1
+192.168.0.1,super,Ruckus!234,192.168.0.101,255.255.255.0,192.168.0.254,10.0.0.1,AP-Sample2
