@@ -503,13 +503,20 @@ class App(Tk):
         ).pack(anchor="w", pady=(4, 8))
         upd_row = Frame(outer, bg=BG)
         upd_row.pack(anchor="w", pady=(0, 12))
-        self._upd_status = StringVar(value="")
-        Label(upd_row, textvariable=self._upd_status, font=("Segoe UI", 9), fg="#666", bg=BG).pack(side=LEFT)
+        self._upd_check_btn = Button(
+            upd_row, text="업데이트 확인", font=("Segoe UI", 9, "bold"),
+            bg="#fff", fg=ACCENT, relief="solid", borderwidth=1,
+            highlightbackground=ACCENT, padx=10, pady=2,
+            command=self._manual_github_check, cursor="hand2",
+        )
+        self._upd_check_btn.pack(side=LEFT)
         self._upd_btn = Button(
             upd_row, text="업데이트", font=("Segoe UI", 9, "bold"),
             bg=ACCENT, fg="white", relief="flat", padx=12, pady=2,
             command=self._do_github_update, cursor="hand2",
         )
+        self._upd_status = StringVar(value="")
+        Label(upd_row, textvariable=self._upd_status, font=("Segoe UI", 9), fg="#666", bg=BG).pack(side=LEFT, padx=(10, 0))
         info = getattr(self, "_update_info", None) or {}
         if info.get("available"):
             self._upd_status.set("GitHub에 새 버전이 있습니다.")
@@ -593,12 +600,24 @@ class App(Tk):
         )
         b.pack(fill=X, pady=4)
 
+    def _manual_github_check(self):
+        if hasattr(self, "_upd_status"):
+            self._upd_status.set("GitHub 확인 중...")
+        if hasattr(self, "_upd_check_btn"):
+            self._upd_check_btn.config(state=DISABLED)
+        threading.Thread(target=self._check_github_update, daemon=True).start()
+
     def _check_github_update(self):
         info = gh_updater.check_update(ROOT)
         self._update_info = info
         self.after(0, lambda: self._show_update_ui(info))
 
     def _show_update_ui(self, info: dict):
+        if hasattr(self, "_upd_check_btn"):
+            try:
+                self._upd_check_btn.config(state=NORMAL)
+            except Exception:
+                pass
         if not info or not hasattr(self, "_upd_status"):
             return
         if not info.get("ok"):
