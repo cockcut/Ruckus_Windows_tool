@@ -170,7 +170,7 @@ def keep_latest_results(folder: Path, keep: int = RESULT_KEEP, suffixes=None):
 #   - 소규모/버그픽스: 0.0.1 → 0.0.1 patch1 → patch2 ... (또는 패치 누적 후 0.0.2)
 #   - 기능 추가·중규모: 0.0.2, 0.0.3 ...
 #   - 대규모 구조 변경: 0.1.0, 0.2.0 ...
-APP_VERSION = "0.0.9 patch1"
+APP_VERSION = "0.0.9 patch2"
 APP_TITLE = f"HSITX Ruckus Technical Tool v{APP_VERSION}"
 BG = "#f4f4f9"
 CARD = "#ffffff"
