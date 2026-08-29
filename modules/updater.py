@@ -46,6 +46,10 @@ def _get(url: str, timeout: int = 20, stream: bool = False):
 
 def fetch_remote_sha() -> str:
     r = _get(API_REF, timeout=15)
+    if r.status_code == 404:
+        raise RuntimeError("저장소를 찾을 수 없습니다. Public 여부/주소/브랜치(main)를 확인하세요.")
+    if r.status_code == 403:
+        raise RuntimeError("GitHub API 제한 또는 저장소 접근 거부(Private).")
     r.raise_for_status()
     data = r.json()
     sha = (data.get("object") or {}).get("sha") or ""

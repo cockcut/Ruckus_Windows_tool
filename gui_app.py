@@ -170,7 +170,7 @@ def keep_latest_results(folder: Path, keep: int = RESULT_KEEP, suffixes=None):
 #   - 소규모/버그픽스: 0.0.1 → 0.0.1 patch1 → patch2 ... (또는 패치 누적 후 0.0.2)
 #   - 기능 추가·중규모: 0.0.2, 0.0.3 ...
 #   - 대규모 구조 변경: 0.1.0, 0.2.0 ...
-APP_VERSION = "0.0.9 patch2"
+APP_VERSION = "0.0.9 patch1"
 APP_TITLE = f"HSITX Ruckus Technical Tool v{APP_VERSION}"
 BG = "#f4f4f9"
 CARD = "#ffffff"
@@ -514,6 +514,12 @@ class App(Tk):
         if info.get("available"):
             self._upd_status.set("GitHub에 새 버전이 있습니다.")
             self._upd_btn.pack(side=LEFT, padx=(10, 0))
+        elif info.get("ok"):
+            self._upd_status.set("최신 버전입니다.")
+            self._upd_btn.pack_forget()
+        elif info.get("message"):
+            self._upd_status.set(str(info.get("message")))
+            self._upd_btn.pack_forget()
         else:
             self._upd_btn.pack_forget()
 
@@ -596,7 +602,7 @@ class App(Tk):
         if not info or not hasattr(self, "_upd_status"):
             return
         if not info.get("ok"):
-            self._upd_status.set("")
+            self._upd_status.set(info.get("message") or "업데이트 확인 실패")
             if hasattr(self, "_upd_btn"):
                 self._upd_btn.pack_forget()
             return
@@ -605,7 +611,7 @@ class App(Tk):
             if hasattr(self, "_upd_btn") and not self._upd_btn.winfo_ismapped():
                 self._upd_btn.pack(side=LEFT, padx=(10, 0))
         else:
-            self._upd_status.set("")
+            self._upd_status.set("최신 버전입니다.")
             if hasattr(self, "_upd_btn"):
                 self._upd_btn.pack_forget()
 
