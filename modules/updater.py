@@ -99,8 +99,6 @@ def _should_skip(rel: Path) -> bool:
 
 def apply_update(root: Path, expected_sha: str = "") -> dict:
     root = Path(root)
-    if root.name.lower().endswith("_devel"):
-        return {"ok": False, "message": "devel 폴더에는 업데이트를 적용하지 않습니다. 운영 폴더에서 실행하세요."}
     try:
         r = _get(ZIP_URL, timeout=60, stream=True)
         r.raise_for_status()

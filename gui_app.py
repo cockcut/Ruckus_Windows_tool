@@ -636,13 +636,6 @@ class App(Tk):
 
     def _do_github_update(self):
         info = getattr(self, "_update_info", None) or {}
-        if ROOT.name.lower().endswith("_devel"):
-            messagebox.showinfo(
-                "안내",
-                "devel 폴더에는 업데이트를 적용하지 않습니다.\n"
-                "운영 폴더(Ruckus_Windows_Tool)에서 실행하세요.",
-            )
-            return
         if not messagebox.askyesno("업데이트", "GitHub에서 최신 소스를 받아 덮어쓸까요?\nresults / upload / firmware .bl7 은 유지됩니다."):
             return
         self._upd_status.set("업데이트 받는 중...")
