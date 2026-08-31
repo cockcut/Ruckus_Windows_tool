@@ -26,7 +26,7 @@ EXE_REPO_PATHS = (
 )
 SHA_FILE_NAME = ".update_sha"
 SKIP_DIR_NAMES = {".git", "__pycache__", "results", "upload", ".grok"}
-SKIP_FILE_NAMES = {SHA_FILE_NAME, "update_token.txt"}
+SKIP_FILE_NAMES = {SHA_FILE_NAME, "update_token.txt", "build_exe.bat"}
 HEADERS = {"User-Agent": "HSITX-Ruckus-Tool-Updater"}
 
 
