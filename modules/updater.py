@@ -124,6 +124,16 @@ def check_update(root: Path, frozen: bool = False) -> dict:
             remote = remote_info["id"]
             extra = {"exe_url": remote_info["url"], "exe_name": remote_info["name"], "exe_size": remote_info["size"]}
         else:
+            rsrc = _get(f"{API_CONTENTS}/gui_app.py?ref={GITHUB_BRANCH}", timeout=15)
+            if rsrc.status_code != 200:
+                return {
+                    "ok": True,
+                    "available": False,
+                    "local": read_local_sha(root),
+                    "remote": "",
+                    "frozen": frozen,
+                    "message": "저장소에 프로그램 소스(gui_app.py)가 없습니다.",
+                }
             remote = fetch_remote_sha()
             extra = {}
     except Exception as e:
