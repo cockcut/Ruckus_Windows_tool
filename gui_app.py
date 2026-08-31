@@ -20,8 +20,12 @@ from tkinter import (
     TOP, BOTTOM, DISABLED, NORMAL, WORD, HORIZONTAL, VERTICAL,
 )
 
-# 로컬 모듈
-ROOT = Path(__file__).resolve().parent
+# 로컬 모듈 (exe면 코드는 임시폴더, 결과/펌웨어는 exe 옆)
+if getattr(sys, "frozen", False):
+    ROOT = Path(sys.executable).resolve().parent
+    sys.path.insert(0, str(Path(getattr(sys, "_MEIPASS", ROOT))))
+else:
+    ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 from modules.ssh_helper import (
     process_ap,
@@ -170,7 +174,7 @@ def keep_latest_results(folder: Path, keep: int = RESULT_KEEP, suffixes=None):
 #   - 소규모/버그픽스: 0.0.1 → 0.0.1 patch1 → patch2 ... (또는 패치 누적 후 0.0.2)
 #   - 기능 추가·중규모: 0.0.2, 0.0.3 ...
 #   - 대규모 구조 변경: 0.1.0, 0.2.0 ...
-APP_VERSION = "0.0.9 patch2"
+APP_VERSION = "0.0.9 patch1"
 APP_TITLE = f"HSITX Ruckus Technical Tool v{APP_VERSION}"
 BG = "#f4f4f9"
 CARD = "#ffffff"
@@ -519,7 +523,10 @@ class App(Tk):
         Label(upd_row, textvariable=self._upd_status, font=("Segoe UI", 9), fg="#666", bg=BG).pack(side=LEFT, padx=(10, 0))
         info = getattr(self, "_update_info", None) or {}
         if info.get("available"):
-            self._upd_status.set("GitHub에 새 버전이 있습니다.")
+            if info.get("frozen"):
+                self._upd_status.set("GitHub에 새 exe가 있습니다.")
+            else:
+                self._upd_status.set("GitHub에 새 버전이 있습니다.")
             self._upd_btn.pack(side=LEFT, padx=(10, 0))
         elif info.get("ok"):
             self._upd_status.set("최신 버전입니다.")
@@ -608,7 +615,8 @@ class App(Tk):
         threading.Thread(target=self._check_github_update, daemon=True).start()
 
     def _check_github_update(self):
-        info = gh_updater.check_update(ROOT)
+        frozen = bool(getattr(sys, "frozen", False))
+        info = gh_updater.check_update(ROOT, frozen=frozen)
         self._update_info = info
         self.after(0, lambda: self._show_update_ui(info))
 
@@ -626,7 +634,10 @@ class App(Tk):
                 self._upd_btn.pack_forget()
             return
         if info.get("available"):
-            self._upd_status.set("GitHub에 새 버전이 있습니다.")
+            if info.get("frozen"):
+                self._upd_status.set("GitHub에 새 exe가 있습니다.")
+            else:
+                self._upd_status.set("GitHub에 새 버전이 있습니다.")
             if hasattr(self, "_upd_btn") and not self._upd_btn.winfo_ismapped():
                 self._upd_btn.pack(side=LEFT, padx=(10, 0))
         else:
@@ -636,13 +647,24 @@ class App(Tk):
 
     def _do_github_update(self):
         info = getattr(self, "_update_info", None) or {}
-        if not messagebox.askyesno("업데이트", "GitHub에서 최신 소스를 받아 덮어쓸까요?\nresults / upload / firmware .bl7 은 유지됩니다."):
+        frozen = bool(getattr(sys, "frozen", False))
+        if frozen:
+            msg = "GitHub에서 새 exe를 받아 지금 실행 파일을 교체할까요?"
+        else:
+            msg = "GitHub에서 최신 소스를 받아 덮어쓸까요?\nresults / upload / firmware .bl7 은 유지됩니다."
+        if not messagebox.askyesno("업데이트", msg):
             return
         self._upd_status.set("업데이트 받는 중...")
         self._upd_btn.config(state=DISABLED)
 
         def work():
-            result = gh_updater.apply_update(ROOT, expected_sha=info.get("remote") or "")
+            result = gh_updater.apply_update(
+                ROOT,
+                expected_sha=info.get("remote") or "",
+                frozen=frozen,
+                exe_path=sys.executable if frozen else "",
+                info=info,
+            )
             self.after(0, lambda: self._after_github_update(result))
 
         threading.Thread(target=work, daemon=True).start()
@@ -651,7 +673,17 @@ class App(Tk):
         if hasattr(self, "_upd_btn"):
             self._upd_btn.config(state=NORMAL)
         if result.get("ok"):
-            messagebox.showinfo("완료", result.get("message") or "업데이트 완료")
+            bat = result.get("replace_bat")
+            if bat:
+                messagebox.showinfo("완료", result.get("message") or "exe 업데이트 준비됨")
+                try:
+                    import subprocess
+                    subprocess.Popen(["cmd", "/c", bat], close_fds=True)
+                except Exception as e:
+                    messagebox.showerror("업데이트", f"교체 스크립트 실행 실패:\n{e}")
+                    return
+            else:
+                messagebox.showinfo("완료", result.get("message") or "업데이트 완료")
             self.destroy()
         else:
             if hasattr(self, "_upd_status"):
