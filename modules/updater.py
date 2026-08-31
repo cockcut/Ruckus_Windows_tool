@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import shutil
@@ -44,6 +45,29 @@ def read_local_sha(root: Path) -> str:
 
 def write_local_sha(root: Path, sha: str) -> None:
     sha_path(root).write_text((sha or "").strip() + "\n", encoding="utf-8")
+
+
+def git_blob_sha(data: bytes) -> str:
+    return hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
+
+
+def gui_app_blob_matches(root: Path, remote_blob: str = "") -> bool:
+    """Compare local gui_app.py to GitHub contents blob SHA."""
+    local = Path(root) / "gui_app.py"
+    if not local.is_file():
+        return False
+    blob = (remote_blob or "").strip()
+    if not blob:
+        r = _get(f"{API_CONTENTS}/gui_app.py?ref={GITHUB_BRANCH}", timeout=15)
+        if r.status_code != 200:
+            return False
+        blob = ((r.json() or {}).get("sha") or "").strip()
+    if not blob:
+        return False
+    try:
+        return git_blob_sha(local.read_bytes()) == blob
+    except Exception:
+        return False
 
 
 def _get(url: str, timeout: int = 20, stream: bool = False):
@@ -134,8 +158,9 @@ def check_update(root: Path, frozen: bool = False) -> dict:
                     "frozen": frozen,
                     "message": "저장소에 프로그램 소스(gui_app.py)가 없습니다.",
                 }
+            remote_blob = ((rsrc.json() or {}).get("sha") or "").strip()
             remote = fetch_remote_sha()
-            extra = {}
+            extra = {"source_blob": remote_blob}
     except Exception as e:
         return {
             "ok": False,
@@ -146,6 +171,11 @@ def check_update(root: Path, frozen: bool = False) -> dict:
             "message": f"업데이트 확인 실패: {e}",
         }
     local = read_local_sha(root)
+    if (not frozen) and (not local) and remote:
+        blob = extra.get("source_blob") or ""
+        if gui_app_blob_matches(root, blob):
+            write_local_sha(root, remote)
+            local = remote
     available = bool(remote) and remote != local
     out = {
         "ok": True,
