@@ -171,10 +171,10 @@ def keep_latest_results(folder: Path, keep: int = RESULT_KEEP, suffixes=None):
         pass
 
 # 버전 규칙:
-#   - 소규모/버그픽스: 0.0.1 → 0.0.1 patch1 → patch2 ... (또는 패치 누적 후 0.0.2)
-#   - 기능 추가·중규모: 0.0.2, 0.0.3 ...
+#   - 소규모/버그픽스: 0.0.10p1, 0.0.10p2 ...
+#   - 기능 추가·중규모: 0.0.11, 0.0.12 ...
 #   - 대규모 구조 변경: 0.1.0, 0.2.0 ...
-APP_VERSION = "0.0.9 patch1"
+APP_VERSION = "0.0.10"
 APP_TITLE = f"HSITX Ruckus Technical Tool v{APP_VERSION}"
 BG = "#f4f4f9"
 CARD = "#ffffff"
@@ -678,7 +678,16 @@ class App(Tk):
                 messagebox.showinfo("완료", result.get("message") or "exe 업데이트 준비됨")
                 try:
                     import subprocess
-                    subprocess.Popen(["cmd", "/c", bat], close_fds=True)
+                    env = os.environ.copy()
+                    for k in list(env):
+                        if k.startswith("_PYI") or k in ("PYTHONHOME", "PYTHONPATH"):
+                            env.pop(k, None)
+                    subprocess.Popen(
+                        ["cmd", "/c", bat],
+                        cwd=str(ROOT),
+                        env=env,
+                        close_fds=True,
+                    )
                 except Exception as e:
                     messagebox.showerror("업데이트", f"교체 스크립트 실행 실패:\n{e}")
                     return

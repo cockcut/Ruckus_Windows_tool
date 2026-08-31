@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Runtime data (keep folders, ignore contents)
+results/**
+!results/**/README.txt
+upload/**
+!upload/**/README.txt
+firmware/*.bl7
+firmware/*.rcks
+firmware/index.html
+
+# Local / OS
+*.log
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Secrets (do not commit)
+*.pem
+*.key
+.env
+credentials.txt
+update_token.txt
+
+# Updater local state
+.update_sha
+.update_tmp/
+
+# PyInstaller
+dist/
+build/
+*.spec
