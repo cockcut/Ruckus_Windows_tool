@@ -596,9 +596,9 @@ class App(Tk):
         info = getattr(self, "_update_info", None) or {}
         if info.get("available"):
             if info.get("frozen"):
-                self._upd_status.set("GitHub에 새 exe가 있습니다.")
+                self._upd_status.set("새 exe가 있습니다.")
             else:
-                self._upd_status.set("GitHub에 새 버전이 있습니다.")
+                self._upd_status.set("새 버전이 있습니다.")
             self._upd_btn.pack(side=LEFT, padx=(10, 0))
         elif info.get("ok"):
             self._upd_status.set("최신 버전입니다.")
@@ -681,7 +681,7 @@ class App(Tk):
 
     def _manual_github_check(self):
         if hasattr(self, "_upd_status"):
-            self._upd_status.set("GitHub 확인 중...")
+            self._upd_status.set("업데이트 확인 중...")
         if hasattr(self, "_upd_check_btn"):
             self._upd_check_btn.config(state=DISABLED)
         threading.Thread(target=self._check_github_update, daemon=True).start()
@@ -707,9 +707,9 @@ class App(Tk):
             return
         if info.get("available"):
             if info.get("frozen"):
-                self._upd_status.set("GitHub에 새 exe가 있습니다.")
+                self._upd_status.set("새 exe가 있습니다.")
             else:
-                self._upd_status.set("GitHub에 새 버전이 있습니다.")
+                self._upd_status.set("새 버전이 있습니다.")
             if hasattr(self, "_upd_btn") and not self._upd_btn.winfo_ismapped():
                 self._upd_btn.pack(side=LEFT, padx=(10, 0))
         else:
@@ -721,9 +721,9 @@ class App(Tk):
         info = getattr(self, "_update_info", None) or {}
         frozen = bool(getattr(sys, "frozen", False))
         if frozen:
-            msg = "GitHub에서 새 exe를 받아 지금 실행 파일을 교체할까요?"
+            msg = "새 exe를 받아 지금 실행 파일을 교체할까요?"
         else:
-            msg = "GitHub에서 최신 소스를 받아 덮어쓸까요?\nresults / upload / firmware .bl7 은 유지됩니다."
+            msg = "최신 소스를 받아 덮어쓸까요?\nresults / upload / firmware .bl7 은 유지됩니다."
         if not messagebox.askyesno("업데이트", msg):
             return
         self._upd_status.set("업데이트 받는 중...")
