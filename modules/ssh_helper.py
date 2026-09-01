@@ -126,8 +126,10 @@ _LEGACY_MACS = (
 class RuckusSSH:
     """Ruckus AP(rkscli) 전용 SSH 세션 래퍼"""
 
-    def __init__(self, timeout: float = 20.0, debug: bool = False, verbose: bool = True):
+    def __init__(self, timeout: float = 10.0, debug: bool = False, verbose: bool = True):
         self.timeout = timeout
+        self._fw_progress = False
+        self._fw_pct = -10
         self.debug = debug
         self.verbose = verbose or debug
         self.client: Optional[paramiko.SSHClient] = None
@@ -146,6 +148,35 @@ class RuckusSSH:
     def _log(self, msg: str):
         if self.debug:
             print(f"[DEBUG] {msg}")
+
+    @staticmethod
+    def _progress_pct(text: str) -> Optional[int]:
+        found = re.findall(r"\]\s*(\d{1,3})\s*", text or "")
+        if not found:
+            return None
+        try:
+            n = int(found[-1])
+        except ValueError:
+            return None
+        return n if 0 <= n <= 100 else None
+
+    @staticmethod
+    def _looks_progress(text: str) -> bool:
+        if not text:
+            return False
+        if "[" in text and "]" in text and ("=" in text or ">" in text):
+            return True
+        return bool(re.search(r"\]\s*\d{1,3}\s*", text))
+
+    def _note_fw_progress(self, text: str) -> None:
+        if not self._fw_progress:
+            return
+        pct = self._progress_pct(text)
+        if pct is None:
+            return
+        if pct >= self._fw_pct + 10 or (pct == 100 and self._fw_pct < 100):
+            self._fw_pct = pct - (pct % 10) if pct < 100 else 100
+            print(f"    [FW] 다운로드 {self._fw_pct}%")
 
     def _apply_legacy_security(self, transport: paramiko.Transport):
         """start_client 전에 호출해야 함 — 지원하는 항목만 설정"""
@@ -357,7 +388,7 @@ class RuckusSSH:
 
         ok, out = self.expect(
             r"(rkscli|ruckus>|ruckus#|Please login|Login:|login:|password|Password|New password|Confirm password)",
-            timeout=15,
+            timeout=10,
         )
         self._v(f"      초기 수신:\n{'-'*40}\n{out}\n{'-'*40}")
 
@@ -407,7 +438,7 @@ class RuckusSSH:
             self.send(new_password)
             ok, out = self.expect(
                 r"(rkscli|Login incorrect|Please login|Successfully completed|success|changed|OK|password)",
-                timeout=15,
+                timeout=10,
             )
             self._v(f"      변경 후 수신:\n{'-'*40}\n{out}\n{'-'*40}")
 
@@ -526,8 +557,8 @@ class RuckusSSH:
                 # 2) SSH handshake
                 self._v("[2/5] SSH 핸드셰이크 (start_client)...")
                 transport = paramiko.Transport(sock)
-                transport.banner_timeout = 30
-                transport.auth_timeout = 30
+                transport.banner_timeout = 10
+                transport.auth_timeout = 10
                 self._apply_legacy_security(transport)
                 transport.start_client(timeout=self.timeout)
                 self._v(f"      원격 SSH 버전: {transport.remote_version}")
@@ -634,7 +665,10 @@ class RuckusSSH:
                 if self.shell.recv_ready():
                     chunk = self.shell.recv(4096).decode("utf-8", errors="ignore")
                     buffer += chunk
-                    self._log(f"RECV << {chunk[:220]!r}")
+                    if self._fw_progress and self._looks_progress(chunk):
+                        self._note_fw_progress(chunk)
+                    else:
+                        self._log(f"RECV << {chunk[:220]!r}")
                     if compiled.search(buffer):
                         self.last_output = buffer
                         return True, buffer
@@ -656,10 +690,15 @@ class RuckusSSH:
         ok, out = self.expect(success_pattern, timeout=timeout)
         # 응답 요약 (너무 길면 앞부분만)
         preview = out.replace("\r", "").strip()
-        if len(preview) > 400:
+        if self._fw_progress:
+            lines = [ln for ln in preview.splitlines() if ln.strip() and not self._looks_progress(ln)]
+            preview = "\n".join(lines[-8:])
+        elif len(preview) > 400:
             preview = preview[:400] + " ..."
         if preview:
             for line in preview.splitlines()[-12:]:
+                if self._looks_progress(line):
+                    continue
                 print(f"    [OUT] {line}")
         print(f"    [CMD] → {'OK' if ok else 'TIMEOUT/FAIL'}")
         return ok, out
@@ -760,10 +799,12 @@ class RuckusSSH:
                 return "FAIL", buf + f"\n세션 종료: {e}"
             if extra:
                 buf += extra
+                self._note_fw_progress(extra)
                 preview = extra.replace("\r", "").strip()
                 if preview:
                     for line in preview.splitlines()[-6:]:
-                        print(f"    [FW] {line}")
+                        if line.strip() and not self._looks_progress(line):
+                            print(f"    [FW] {line}")
             hit = classify(buf)
             if hit:
                 print(f"    [FW] {hit}")
@@ -810,6 +851,8 @@ def process_ap(
     fw_proto: str = "tftp",
     fw_file: str = "",
     fw_factory: bool = False,
+    fw_change_ip: bool = True,
+    provision_tag: str = "",
     standard_password: str = "",
     fallback_user: str = "",
     try_factory: bool = True,
@@ -825,7 +868,7 @@ def process_ap(
         "message": "",
     }
 
-    ssh = RuckusSSH(timeout=20, debug=debug, verbose=debug)
+    ssh = RuckusSSH(timeout=10, debug=debug, verbose=debug)
     print(f"  → 접속 중: {ip} ...")
 
     std_user = (fallback_user or "").strip()
@@ -843,7 +886,7 @@ def process_ap(
     if csv_failed_no_change and std_pw:
         retry_user = std_user or (user or DEFAULT_USER)
         print(f"  → 2차 계정으로 재시도: {retry_user}")
-        ssh = RuckusSSH(timeout=20, debug=debug, verbose=debug)
+        ssh = RuckusSSH(timeout=10, debug=debug, verbose=debug)
         ok, msg = ssh.connect(
             ip,
             username=retry_user,
@@ -958,12 +1001,17 @@ def process_ap(
                     result["message"] = f"실패: {failed}"
                 else:
                     print("    [CMD] fw update (No update / Completed 대기, 최대 180초)")
-                    ok, out = ssh.run(
-                        "fw update",
-                        success_pattern=r"(No update[\s\S]*?OK|fw\(\d+\)\s*:\s*Completed|fw\(\d+\)\s*:\s*Fail|In progress|rkscli|ruckus\(ap-mode\)#)",
-                        timeout=30,
-                    )
-                    kind, wait_out = ssh.wait_fw_update_result(first_out=out or "", timeout=180)
+                    ssh._fw_progress = True
+                    ssh._fw_pct = -10
+                    try:
+                        ok, out = ssh.run(
+                            "fw update",
+                            success_pattern=r"(No update[\s\S]*?OK|fw\(\d+\)\s*:\s*Completed|fw\(\d+\)\s*:\s*Fail|In progress|rkscli|ruckus\(ap-mode\)#)",
+                            timeout=30,
+                        )
+                        kind, wait_out = ssh.wait_fw_update_result(first_out=out or "", timeout=180)
+                    finally:
+                        ssh._fw_progress = False
                     if kind == "SAME":
                         result["status"] = "OK"
                         result["message"] = "동일한버전입니다. 다음장비로 이동합니다."
@@ -1020,6 +1068,7 @@ def process_ap(
             else:
                 control = f"wsg/firmware/{model}_{fw_ver}.rcks"
                 print(f"    control: {control}")
+                tag = (provision_tag or "").strip()
                 steps = [
                     "fw set proto HTTPS",
                     "fw set port 443",
@@ -1036,13 +1085,24 @@ def process_ap(
                     result["message"] = f"실패: {failed}"
                 else:
                     print("    [CMD] fw update (SZ HTTPS, 최대 180초)")
-                    ok, out = ssh.run(
-                        "fw update",
-                        success_pattern=r"(No update[\s\S]*?OK|fw\(\d+\)\s*:\s*Completed|fw\(\d+\)\s*:\s*Fail|needs a reboot|In progress|rkscli|ruckus\(ap-mode\)#)",
-                        timeout=30,
-                    )
-                    kind, wait_out = ssh.wait_fw_update_result(first_out=out or "", timeout=180)
+                    ssh._fw_progress = True
+                    ssh._fw_pct = -10
+                    try:
+                        ok, out = ssh.run(
+                            "fw update",
+                            success_pattern=r"(No update[\s\S]*?OK|fw\(\d+\)\s*:\s*Completed|fw\(\d+\)\s*:\s*Fail|needs a reboot|In progress|rkscli|ruckus\(ap-mode\)#)",
+                            timeout=30,
+                        )
+                        kind, wait_out = ssh.wait_fw_update_result(first_out=out or "", timeout=180)
+                    finally:
+                        ssh._fw_progress = False
                     if kind == "SAME":
+                        if tag:
+                            tag_cmd = f'set provisioning-tag "{tag}"' if " " in tag else f"set provisioning-tag {tag}"
+                            ssh.run(tag_cmd, timeout=10)
+                        if sz:
+                            ssh.run("set scg enable", timeout=10)
+                            ssh.run(f"set scg ip {sz}", timeout=10)
                         result["status"] = "OK"
                         result["message"] = f"{ip} 동일한버전입니다. 다음장비로 이동합니다."
                     elif kind == "REBOOT_NEEDED":
@@ -1059,6 +1119,10 @@ def process_ap(
                         print("    [FW] 완료. SZ/hostname/IP 설정")
                         time.sleep(1)
                         parts = [f"fw={fw_ver}"]
+                        if tag:
+                            tag_cmd = f'set provisioning-tag "{tag}"' if " " in tag else f"set provisioning-tag {tag}"
+                            ok, _ = ssh.run(tag_cmd, timeout=10)
+                            parts.append(f"tag:{tag}:{'OK' if ok else 'FAIL'}")
                         if sz:
                             ssh.run("set scg enable", timeout=10)
                             ok, _ = ssh.run(f"set scg ip {sz}", timeout=10)
@@ -1066,19 +1130,29 @@ def process_ap(
                         if hostname:
                             ok, _ = ssh.run(f"set device-name {hostname}", timeout=10)
                             parts.append(f"Name:{hostname}:{'OK' if ok else 'FAIL'}")
-                        if new_ip and subnet and gw:
+                        if fw_change_ip and new_ip and subnet and gw:
                             ok, _ = ssh.run(f"set ipaddr wan {new_ip} {subnet} {gw}", timeout=8)
                             parts.append(f"IP:{new_ip}:{'OK' if ok else 'TIMEOUT'}")
-                        if ip == new_ip:
+                            do_reboot = (ip == new_ip)
+                        else:
+                            parts.append("IP변경안함")
+                            do_reboot = True
+                        if do_reboot:
                             try:
                                 ssh.run("reboot", success_pattern=r"(OK|rkscli)", timeout=8)
                                 parts.append("reboot")
                             except Exception:
                                 parts.append("reboot(끊김)")
-                            result["message"] = (
-                                f"{ip}의 펌웨어 업그레이드(vers.: {fw_ver}) | SZ - {fw_host} | "
-                                f"IP- {new_ip} {subnet} {gw} 설정 변경 후 재부팅 명령 실행 완료."
-                            )
+                            if fw_change_ip and new_ip:
+                                result["message"] = (
+                                    f"{ip}의 펌웨어 업그레이드(vers.: {fw_ver}) | SZ - {fw_host} | "
+                                    f"IP- {new_ip} {subnet} {gw} 설정 변경 후 재부팅 명령 실행 완료."
+                                )
+                            else:
+                                result["message"] = (
+                                    f"{ip}의 펌웨어 업그레이드(vers.: {fw_ver}) | SZ - {fw_host} | "
+                                    f"IP 변경 없음, 재부팅 명령 실행 완료."
+                                )
                         else:
                             parts.append("reboot건너뜀")
                             result["message"] = (

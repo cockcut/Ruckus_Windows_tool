@@ -37,6 +37,7 @@ from modules.ssh_helper import (
 from modules.sz_api import (
     CONTROLLER_API_MAP,
     SmartZoneAPI,
+    AP_ROW_FIELDS,
     ap_to_row,
     switch_to_row,
     save_csv,
@@ -61,9 +62,27 @@ RESULTS_DPSK = RESULTS_DIR / "dpsk"
 RESULTS_UDPSK = RESULTS_DIR / "dpsk_ul"
 RESULTS_SNMP = RESULTS_DIR / "snmp"
 FW_DIR = ROOT / "firmware"
+LOG_DIR = ROOT / "log"
+LOG_AP_BATCH = LOG_DIR / "6_ap_batch"
+LOG_SZ = LOG_DIR / "1_sz_api"
+LOG_UNLEASHED = LOG_DIR / "2_unleashed_api"
+LOG_OUI = LOG_DIR / "oui"
+LOG_PSK = LOG_DIR / "3_ssid_psk"
+LOG_FW = LOG_DIR / "7_fw_auto_upgrade"
+LOG_SZFW = LOG_DIR / "9_fw_sz"
+LOG_DPSK = LOG_DIR / "dpsk"
+LOG_UDPSK = LOG_DIR / "dpsk_ul"
+LOG_SNMP = LOG_DIR / "snmp"
+LOG_FWCLI = LOG_DIR / "8_fw_cli"
+LOG_SINGLE = LOG_DIR / "12_single"
 SAMPLES_DIR.mkdir(exist_ok=True)
 UPLOAD_DIR.mkdir(exist_ok=True)
-for _d in (RESULTS_DIR, RESULTS_AP_BATCH, RESULTS_SZ, RESULTS_UNLEASHED, RESULTS_OUI, RESULTS_PSK, RESULTS_FW, RESULTS_SZFW, RESULTS_DPSK, RESULTS_UDPSK, RESULTS_SNMP, FW_DIR):
+for _d in (
+    RESULTS_DIR, RESULTS_AP_BATCH, RESULTS_SZ, RESULTS_UNLEASHED, RESULTS_OUI,
+    RESULTS_PSK, RESULTS_FW, RESULTS_SZFW, RESULTS_DPSK, RESULTS_UDPSK, RESULTS_SNMP, FW_DIR,
+    LOG_DIR, LOG_AP_BATCH, LOG_SZ, LOG_UNLEASHED, LOG_OUI, LOG_PSK, LOG_FW, LOG_SZFW,
+    LOG_DPSK, LOG_UDPSK, LOG_SNMP, LOG_FWCLI, LOG_SINGLE,
+):
     _d.mkdir(exist_ok=True)
 
 RESULT_HINT = "결과파일은 최대 5개, 오래된순으로 삭제됨"
@@ -82,6 +101,10 @@ PW_RULE_KO = (
 PW_RULE_WARN = (
     "2차 비밀번호가 규칙에 맞지 않습니다.\n\n"
     + PW_RULE_KO
+)
+PW_COMPLEX_TIP = (
+    "구형 펌웨어는 암호 복잡성을 지원하지 않을 수 있습니다.\n"
+    "끄면 단순 비밀번호로도 2차 계정을 사용할 수 있습니다."
 )
 
 
@@ -110,15 +133,21 @@ def validate_ruckus_password(pw: str):
 
 
 class BalloonTip:
-    def __init__(self, widget, text: str):
+    def __init__(self, widget, text: str, enabled: bool = True):
         self.widget = widget
         self.text = text
+        self.enabled = enabled
         self.tip = None
         widget.bind("<Enter>", self._show)
         widget.bind("<Leave>", self._hide)
 
+    def set_enabled(self, on: bool):
+        self.enabled = bool(on)
+        if not self.enabled:
+            self._hide()
+
     def _show(self, _event=None):
-        if self.tip:
+        if self.tip or not self.enabled or not (self.text or "").strip():
             return
         x = self.widget.winfo_rootx() + 16
         y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
@@ -173,7 +202,7 @@ def keep_latest_results(folder: Path, keep: int = RESULT_KEEP, suffixes=None):
 #   - 소규모/버그픽스: 0.0.10p1, 0.0.10p2 ...
 #   - 기능 추가·중규모: 0.0.11, 0.0.12 ...
 #   - 대규모 구조 변경: 0.1.0, 0.2.0 ...
-APP_VERSION = "0.0.10p2"
+APP_VERSION = "0.0.1"
 APP_TITLE = f"HSITX Ruckus Technical Tool v{APP_VERSION}"
 BG = "#f4f4f9"
 CARD = "#ffffff"
@@ -374,6 +403,7 @@ class App(Tk):
         self._stop_flag = False
         self._csv_rows = []
         self._update_info = None
+        self.alt_pw_complex = BooleanVar(value=True)
 
         self._build_main()
         self.after(100, self._drain_log)
@@ -434,6 +464,49 @@ class App(Tk):
         inner.bind("<Leave>", _unbind)
         canvas.bind("<Enter>", _bind)
         return inner
+
+    def _make_log(self, parent, title="실행 로그", height=8):
+        """본문 아래 로그. 오른쪽 아래 손잡이를 세로로 드래그하면 높이만 조절."""
+        Label(parent, text=title, font=("Segoe UI", 10, "bold"), bg=BG).pack(anchor="w", pady=(8, 2))
+        box = Frame(parent, bg="#ced4da", highlightbackground="#adb5bd", highlightthickness=1)
+        box.pack(fill=X)
+        body = Frame(box, bg="#1e1e1e")
+        body.pack(fill=BOTH, expand=True)
+        self.log_text = Text(
+            body, font=("Consolas", 9), height=height, wrap=WORD,
+            bg="#1e1e1e", fg="#d4d4d4", insertbackground="white",
+            relief="flat", padx=8, pady=8, borderwidth=0,
+        )
+        sb = Scrollbar(body, command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=sb.set)
+        self.log_text.pack(side=LEFT, fill=BOTH, expand=True)
+        sb.pack(side=RIGHT, fill=Y)
+        bar = Frame(box, bg="#f1f3f5", height=12)
+        bar.pack(fill=X, side=BOTTOM)
+        bar.pack_propagate(False)
+        grip = Canvas(bar, width=22, height=12, bg="#f1f3f5", highlightthickness=0, cursor="sb_v_double_arrow")
+        grip.pack(side=RIGHT, padx=4)
+        grip.create_line(4, 9, 18, 9, fill="#868e96")
+        grip.create_line(8, 6, 18, 6, fill="#868e96")
+        grip.create_line(12, 3, 18, 3, fill="#868e96")
+        st = {"y": 0, "h": height}
+
+        def _press(e):
+            st["y"] = e.y_root
+            try:
+                st["h"] = int(self.log_text.cget("height"))
+            except Exception:
+                st["h"] = height
+
+        def _drag(e):
+            dy = e.y_root - st["y"]
+            lines = max(4, min(40, st["h"] + int(round(dy / 16.0))))
+            self.log_text.configure(height=lines)
+
+        for w in (grip, bar):
+            w.bind("<ButtonPress-1>", _press)
+            w.bind("<B1-Motion>", _drag)
+            w.configure(cursor="sb_v_double_arrow")
 
     def _vscroll_pane(self, parent, width=None, bg=None):
         """왼쪽/오른쪽이 각각 세로 스크롤되는 패널."""
@@ -767,11 +840,11 @@ class App(Tk):
         Label(acc2, text="Password", width=10, anchor="w", bg=CARD, font=("Segoe UI", 10)).grid(row=1, column=0, sticky="w", pady=2)
         self.ap_pass2_entry = Entry(acc2, textvariable=self.ap_pass2, width=16, font=("Segoe UI", 10), show="*")
         self.ap_pass2_entry.grid(row=1, column=1, sticky="w", pady=2)
-        BalloonTip(self.ap_pass2_entry, PW_RULE_KO)
+        self.ap_pass2_tip = BalloonTip(self.ap_pass2_entry, PW_RULE_KO, enabled=self._alt_pw_complex_on())
         self.ap_pass2_show = BooleanVar(value=False)
         Checkbutton(acc2, text="표시", variable=self.ap_pass2_show, bg=CARD,
                     command=lambda: self.ap_pass2_entry.config(show="" if self.ap_pass2_show.get() else "*")).grid(row=1, column=2, sticky="w", padx=(6, 0))
-        Label(acc2, text="강제변경 비밀번호 / CSV 실패 시 계정", font=("Segoe UI", 8), bg=CARD, fg="#888").grid(row=2, column=0, columnspan=3, sticky="w")
+        self._alt_pw_hint_row(acc2)
 
         row1 = Frame(left_csv, bg=CARD)
         row1.pack(fill=X, pady=6)
@@ -835,13 +908,13 @@ class App(Tk):
         op_fr.pack(fill=X, pady=8)
 
         Label(op_fr, text="2) 작업 선택", font=("Segoe UI", 10, "bold"), bg=CARD).pack(anchor="w")
-        self.op_var = StringVar(value=OPERATIONS[0][0])
+        self.op_var = StringVar(value=OPERATIONS[0][1])
         op_row = Frame(op_fr, bg=CARD)
         op_row.pack(fill=X, pady=6)
         self.op_combo = ttk.Combobox(
             op_row,
             textvariable=self.op_var,
-            values=[f"{k} — {v}" for k, v in OPERATIONS],
+            values=[v for _k, v in OPERATIONS],
             state="readonly",
             width=50,
             font=("Segoe UI", 10),
@@ -869,26 +942,15 @@ class App(Tk):
             bg=BTN_BG, relief="solid", borderwidth=1, padx=12, pady=5,
             command=lambda: self._open_path(RESULTS_AP_BATCH), cursor="hand2",
         ).pack(side=LEFT)
+        self._latest_result_btn(run_fr, RESULTS_AP_BATCH)
+        self._log_action_btns(run_fr, LOG_AP_BATCH, bg=BG)
         Label(run_fr, text=RESULT_HINT, font=("Segoe UI", 8), fg="#888", bg=BG).pack(side=LEFT, padx=(8, 0))
 
         self.progress = ttk.Progressbar(outer, mode="determinate")
         self.progress.pack(fill=X, pady=(4, 4))
         self.status_var = StringVar(value="대기 중")
         Label(outer, textvariable=self.status_var, font=("Segoe UI", 9), bg=BG, fg="#555").pack(anchor="w")
-
-        # --- 로그 ---
-        Label(outer, text="실행 로그", font=("Segoe UI", 10, "bold"), bg=BG).pack(anchor="w", pady=(8, 2))
-        log_fr = Frame(outer, bg=CARD)
-        log_fr.pack(fill=BOTH, expand=True)
-        self.log_text = Text(
-            log_fr, font=("Consolas", 9), wrap=WORD, bg="#1e1e1e", fg="#d4d4d4",
-            insertbackground="white", relief="flat", padx=8, pady=8,
-        )
-        sb = Scrollbar(log_fr, command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=sb.set)
-        self.log_text.pack(side=LEFT, fill=BOTH, expand=True)
-        sb.pack(side=RIGHT, fill=Y)
-
+        self._make_log(outer, "실행 로그", 8)
         self._csv_rows = []
 
     def _download_sample(self):
@@ -985,29 +1047,61 @@ class App(Tk):
             )
 
     def _selected_operation(self) -> str:
-        val = self.op_combo.get()
-        if "—" in val:
-            return val.split("—")[0].strip()
-        return self.op_var.get().split()[0]
+        val = (self.op_combo.get() or "").strip()
+        for k, v in OPERATIONS:
+            if val == v or val == k or val.startswith(f"{k} "):
+                return k
+        idx = self.op_combo.current()
+        if 0 <= idx < len(OPERATIONS):
+            return OPERATIONS[idx][0]
+        return OPERATIONS[0][0]
 
     def _require_second_account(self, user_var, pass_var) -> bool:
         u = (user_var.get() if user_var is not None else "").strip()
         p = (pass_var.get() if pass_var is not None else "").strip()
         if not u or not p:
-            messagebox.showwarning(
-                "안내",
-                "2차 기본계정을 입력안하면 초기화된 AP에 접속이 불가합니다. 입력해주세요.\n\n"
-                + PW_RULE_KO,
-            )
+            msg = "2차 기본계정을 입력안하면 초기화된 AP에 접속이 불가합니다. 입력해주세요."
+            if self._alt_pw_complex_on():
+                msg += "\n\n" + PW_RULE_KO
+            messagebox.showwarning("안내", msg)
             return False
-        ok, reason = validate_ruckus_password(p)
-        if not ok:
-            messagebox.showwarning(
-                "2차 기본계정 비밀번호 규칙",
-                f"{reason}\n\n{PW_RULE_KO}",
-            )
-            return False
+        if self._alt_pw_complex_on():
+            ok, reason = validate_ruckus_password(p)
+            if not ok:
+                messagebox.showwarning(
+                    "2차 기본계정 비밀번호 규칙",
+                    f"{reason}\n\n{PW_RULE_KO}",
+                )
+                return False
         return True
+
+    def _sync_alt_pw_tips(self):
+        on = self._alt_pw_complex_on()
+        for name in ("ap_pass2_tip", "fwup_pass2_tip", "fwsz_pass2_tip"):
+            tip = getattr(self, name, None)
+            if tip:
+                tip.set_enabled(on)
+
+    def _alt_pw_complex_on(self) -> bool:
+        var = getattr(self, "alt_pw_complex", None)
+        try:
+            return bool(var.get()) if var is not None else True
+        except Exception:
+            return True
+
+    def _alt_pw_hint_row(self, parent):
+        """힌트(작은 글씨) + 표시 아래 복잡성 체크."""
+        Label(
+            parent,
+            text="강제변경 비밀번호 / CSV 실패 시 계정",
+            font=("Segoe UI", 8), bg=CARD, fg="#888",
+        ).grid(row=2, column=0, columnspan=2, sticky="w")
+        cb = Checkbutton(
+            parent, text="복잡성", variable=self.alt_pw_complex, bg=CARD,
+            font=("Segoe UI", 8), command=self._sync_alt_pw_tips,
+        )
+        cb.grid(row=2, column=2, sticky="w", padx=(6, 0))
+        BalloonTip(cb, PW_COMPLEX_TIP)
 
     def _start_batch(self):
         if self._worker and self._worker.is_alive():
@@ -1085,6 +1179,7 @@ class App(Tk):
                         r.get("user", ""), r.get("password", ""),
                     ])
             keep_latest_results(RESULTS_AP_BATCH)
+            self._save_session_log(LOG_AP_BATCH, f"batch_{operation}")
             ok_n = sum(1 for r in results if r.get("status") == "OK")
             self._log_queue.put(f"\n===== 완료: 성공 {ok_n}/{len(results)} =====\n결과 파일: {out}\n")
         except Exception as e:
@@ -1213,6 +1308,8 @@ class App(Tk):
         rrow = Frame(form_right, bg=CARD)
         rrow.pack(anchor="w", pady=2)
         same_btn(rrow, "결과 폴더 열기", lambda: self._open_path(RESULTS_PSK), BTN_BG, fg="#333", relief="solid")
+        same_btn(rrow, "최근 결과 다운로드", lambda: self._download_latest_results(RESULTS_PSK), "#28a745")
+        self._log_action_btns(rrow, LOG_PSK, bg=CARD)
         Label(rrow, text=RESULT_HINT, font=("Segoe UI", 8), fg="#888", bg=CARD).pack(side=LEFT, padx=(8, 0))
 
         chg = Frame(outer, bg=CARD, padx=12, pady=6,
@@ -1315,19 +1412,7 @@ class App(Tk):
         ).grid(row=2, column=0, sticky="w")
         off_fr, self.psk_tree_off = make_tree(lists, 6, "none", "PskOff.Treeview")
         off_fr.grid(row=3, column=0, sticky="nsew")
-
-        Label(outer, text="로그", font=("Segoe UI", 10, "bold"), bg=BG).pack(anchor="w")
-        log_fr = Frame(outer, bg=CARD)
-        log_fr.pack(fill=X)
-        self.log_text = Text(
-            log_fr, font=("Consolas", 9), height=4, wrap=WORD,
-            bg="#1e1e1e", fg="#d4d4d4", relief="flat", padx=8, pady=8,
-        )
-        sb = Scrollbar(log_fr, command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=sb.set)
-        self.log_text.pack(side=LEFT, fill=BOTH, expand=True)
-        sb.pack(side=RIGHT, fill=Y)
-
+        self._make_log(outer, "로그", 4)
         self._psk_rows = []
         self._psk_zones = []
 
@@ -1618,6 +1703,7 @@ class App(Tk):
                     results,
                 )
                 keep_latest_results(RESULTS_PSK)
+                self._save_session_log(LOG_PSK, "psk")
                 log(f"결과 파일: {out}")
                 log("WLAN 목록 자동 새로고침...")
                 zone_id = self._psk_selected_zone_id()
@@ -1780,6 +1866,10 @@ class App(Tk):
                command=self._dpsk_csv).pack(side=RIGHT, padx=4)
         Button(head, text="선택 항목 삭제", bg="#dc3545", fg="white", relief="flat", padx=8,
                command=self._dpsk_delete).pack(side=RIGHT, padx=4)
+        Button(head, text="결과 폴더 열기", bg=BTN_BG, relief="solid", borderwidth=1, padx=8,
+               command=lambda: self._open_path(RESULTS_DPSK)).pack(side=RIGHT, padx=4)
+        Button(head, text="최근 결과 다운로드", bg="#28a745", fg="white", relief="flat", padx=8,
+               command=lambda: self._download_latest_results(RESULTS_DPSK)).pack(side=RIGHT, padx=4)
 
         cols = ("zone", "wlan", "user", "psk", "mac", "role", "vlan", "group", "created", "exp", "status")
         tree_fr = Frame(main, bg=CARD)
@@ -2120,6 +2210,10 @@ class App(Tk):
                relief="flat", padx=16, pady=6, command=self._icx_query, cursor="hand2").pack(side=LEFT, pady=(12, 0))
         Button(form, text="CSV 다운로드", bg="#28a745", fg="white", relief="flat", padx=12, pady=6,
                command=self._icx_csv).pack(side=LEFT, padx=8, pady=(12, 0))
+        Button(form, text="결과 폴더 열기", bg=BTN_BG, relief="solid", borderwidth=1, padx=10, pady=6,
+               command=lambda: self._open_path(RESULTS_SNMP)).pack(side=LEFT, padx=(0, 6), pady=(12, 0))
+        Button(form, text="최근 결과 다운로드", bg="#28a745", fg="white", relief="flat", padx=10, pady=6,
+               command=lambda: self._download_latest_results(RESULTS_SNMP)).pack(side=LEFT, pady=(12, 0))
 
         self.icx_info = StringVar(value="Community / Switch IP 입력 후 조회하세요.")
         Label(outer, textvariable=self.icx_info, font=("Segoe UI", 9), bg=BG, fg="#555").pack(anchor="w", pady=(8, 4))
@@ -2280,7 +2374,16 @@ class App(Tk):
             btn_row, text="결과 폴더 열기", font=("Segoe UI", 10),
             bg=BTN_BG, relief="solid", borderwidth=1, padx=12, pady=5,
             command=lambda: self._open_path(RESULTS_SZ), cursor="hand2",
+        ).pack(side=LEFT, padx=(0, 8))
+        Button(
+            btn_row, text="최근 결과 다운로드", font=("Segoe UI", 10),
+            bg="#28a745", fg="white", relief="flat", padx=12, pady=5,
+            command=lambda: self._download_latest_results(
+                RESULTS_SZ, ["_AP.csv", "_BSSID.csv", "_Switch.csv"]
+            ),
+            cursor="hand2",
         ).pack(side=LEFT)
+        self._log_action_btns(btn_row, LOG_SZ, bg=CARD)
         Label(btn_row, text=RESULT_HINT, font=("Segoe UI", 8), fg="#888", bg=CARD).pack(side=LEFT, padx=(8, 0))
 
         self.sz_summary = StringVar(value="대기 중")
@@ -2291,7 +2394,7 @@ class App(Tk):
         nb.pack(fill=BOTH, expand=True, pady=(4, 4))
         self.sz_trees = {}
         tabs = [
-            ("AP", ("AP_Name", "IP", "AP_MAC", "serial", "Model", "status", "firmwareVer", "Clients", "ZoneDomain")),
+            ("AP", AP_ROW_FIELDS),
             ("BSSID(WLAN)", ("deviceName", "apMac", "wlanName", "bssid", "radioid", "ip", "eirp2G", "eirp5G", "eirp6G")),
             ("Switch", ("switchName", "ipAddress", "macAddress", "serialNumber", "model", "status", "firmwareVersion")),
         ]
@@ -2299,9 +2402,18 @@ class App(Tk):
             fr = Frame(nb, bg=CARD)
             nb.add(fr, text=title)
             tree = ttk.Treeview(fr, columns=cols, show="headings", height=12)
+            ap_w = {
+                "AP_Name": 130, "IP": 110, "AP_MAC": 130, "serial": 120, "Model": 90,
+                "channel2G": 80, "channel5G": 80, "channel6G": 80,
+                "status": 80, "config_status": 100, "firmwareVer": 110,
+                "airtime2G": 80, "airtime5G": 80, "airtime6G": 80,
+                "noise2G": 70, "noise5G": 70, "noise6G": 70,
+                "eirp2G": 70, "eirp5G": 70, "eirp6G": 70,
+                "Clients": 60, "poePort": 80, "ZoneDomain": 120,
+            }
             for c in cols:
                 tree.heading(c, text=c)
-                tree.column(c, width=140, anchor="w")
+                tree.column(c, width=ap_w.get(c, 120), anchor="w", stretch=False)
             sb_y = Scrollbar(fr, orient=VERTICAL, command=tree.yview)
             sb_x = Scrollbar(fr, orient=HORIZONTAL, command=tree.xview)
             tree.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
@@ -2312,18 +2424,7 @@ class App(Tk):
             fr.grid_columnconfigure(0, weight=1)
             self.sz_trees[title] = (tree, cols)
 
-        Label(outer, text="로그", font=("Segoe UI", 10, "bold"), bg=BG).pack(anchor="w")
-        log_fr = Frame(outer, bg=CARD)
-        log_fr.pack(fill=X)
-        self.log_text = Text(
-            log_fr, font=("Consolas", 9), height=8, wrap=WORD,
-            bg="#1e1e1e", fg="#d4d4d4", relief="flat", padx=8, pady=8,
-        )
-        sb = Scrollbar(log_fr, command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=sb.set)
-        self.log_text.pack(side=LEFT, fill=BOTH, expand=True)
-        sb.pack(side=RIGHT, fill=Y)
-
+        self._make_log(outer, "로그", 8)
         self._sz_result = None
 
     def _sz_update_api_versions(self, event=None):
@@ -2369,9 +2470,7 @@ class App(Tk):
                 sw_rows = [switch_to_row(s) for s in result["switches"]]
                 bssid_rows = result["bssid_rows"]
 
-                ap_fields = list(ap_rows[0].keys()) if ap_rows else [
-                    "AP_Name", "IP", "AP_MAC", "serial", "Model", "status", "firmwareVer", "Clients", "ZoneDomain"
-                ]
+                ap_fields = list(AP_ROW_FIELDS)
                 b_fields = list(bssid_rows[0].keys()) if bssid_rows else [
                     "deviceName", "apMac", "wlanName", "bssid", "radioid", "ip", "eirp2G", "eirp5G", "eirp6G"
                 ]
@@ -2383,6 +2482,7 @@ class App(Tk):
                 p2 = save_csv(Path(str(prefix) + "_BSSID.csv"), b_fields, bssid_rows)
                 p3 = save_csv(Path(str(prefix) + "_Switch.csv"), s_fields, sw_rows)
                 keep_latest_results(RESULTS_SZ, suffixes=["_AP.csv", "_BSSID.csv", "_Switch.csv"])
+                self._save_session_log(LOG_SZ, "sz")
                 log(f"CSV 저장:\n  {p1}\n  {p2}\n  {p3}")
 
                 summary = (
@@ -2517,6 +2617,10 @@ class App(Tk):
                command=self._udpsk_csv).pack(side=RIGHT, padx=4)
         Button(head, text="선택 항목 삭제", bg="#dc3545", fg="white", relief="flat", padx=8,
                command=self._udpsk_delete).pack(side=RIGHT, padx=4)
+        Button(head, text="결과 폴더 열기", bg=BTN_BG, relief="solid", borderwidth=1, padx=8,
+               command=lambda: self._open_path(RESULTS_UDPSK)).pack(side=RIGHT, padx=4)
+        Button(head, text="최근 결과 다운로드", bg="#28a745", fg="white", relief="flat", padx=8,
+               command=lambda: self._download_latest_results(RESULTS_UDPSK)).pack(side=RIGHT, padx=4)
 
         cols = ("wlan", "dpsk_len", "shared_dpsk", "shared_num", "user", "psk", "vlan",
                 "clients", "usage", "mac", "period", "status", "start_point",
@@ -2740,7 +2844,16 @@ class App(Tk):
             btn_row, text="결과 폴더 열기", font=("Segoe UI", 10),
             bg=BTN_BG, relief="solid", borderwidth=1, padx=12, pady=5,
             command=lambda: self._open_path(RESULTS_UNLEASHED), cursor="hand2",
+        ).pack(side=LEFT, padx=(0, 8))
+        Button(
+            btn_row, text="최근 결과 다운로드", font=("Segoe UI", 10),
+            bg="#28a745", fg="white", relief="flat", padx=12, pady=5,
+            command=lambda: self._download_latest_results(
+                RESULTS_UNLEASHED, ["_AP.csv", "_WLAN.csv"]
+            ),
+            cursor="hand2",
         ).pack(side=LEFT)
+        self._log_action_btns(btn_row, LOG_UNLEASHED, bg=CARD)
         Label(btn_row, text=RESULT_HINT, font=("Segoe UI", 8), fg="#888", bg=CARD).pack(side=LEFT, padx=(8, 0))
 
         self.ul_summary = StringVar(value="대기 중")
@@ -2779,17 +2892,7 @@ class App(Tk):
             fr.grid_columnconfigure(0, weight=1)
             self.ul_trees[title] = (tree, cols)
 
-        Label(outer, text="로그", font=("Segoe UI", 10, "bold"), bg=BG).pack(anchor="w")
-        log_fr = Frame(outer, bg=CARD)
-        log_fr.pack(fill=X)
-        self.log_text = Text(
-            log_fr, font=("Consolas", 9), height=8, wrap=WORD,
-            bg="#1e1e1e", fg="#d4d4d4", relief="flat", padx=8, pady=8,
-        )
-        sb = Scrollbar(log_fr, command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=sb.set)
-        self.log_text.pack(side=LEFT, fill=BOTH, expand=True)
-        sb.pack(side=RIGHT, fill=Y)
+        self._make_log(outer, "로그", 8)
 
     def _ul_run(self):
         host = self.ul_ip.get().strip()
@@ -2838,6 +2941,7 @@ class App(Tk):
                     RESULTS_UNLEASHED / f"ul_{host}_{ts}_WLAN.csv", wlan_fields, wlan_rows
                 )
                 keep_latest_results(RESULTS_UNLEASHED, suffixes=["_AP.csv", "_WLAN.csv"])
+                self._save_session_log(LOG_UNLEASHED, "ul")
                 log(f"CSV 저장:\n  {p1}\n  {p2}")
 
                 summary = f"완료 | AP={len(ap_rows)} WLAN={len(wlan_rows)}"
@@ -2907,11 +3011,11 @@ class App(Tk):
         Label(acc2, text="Password", width=10, anchor="w", bg=CARD, font=("Segoe UI", 10)).grid(row=1, column=0, sticky="w", pady=2)
         self.fwsz_pass2_entry = Entry(acc2, textvariable=self.fwsz_pass2, width=16, font=("Segoe UI", 10), show="*")
         self.fwsz_pass2_entry.grid(row=1, column=1, sticky="w", pady=2)
-        BalloonTip(self.fwsz_pass2_entry, PW_RULE_KO)
+        self.fwsz_pass2_tip = BalloonTip(self.fwsz_pass2_entry, PW_RULE_KO, enabled=self._alt_pw_complex_on())
         self.fwsz_pass2_show = BooleanVar(value=False)
         Checkbutton(acc2, text="표시", variable=self.fwsz_pass2_show, bg=CARD,
                     command=lambda: self.fwsz_pass2_entry.config(show="" if self.fwsz_pass2_show.get() else "*")).grid(row=1, column=2, sticky="w", padx=(6, 0))
-        Label(acc2, text="강제변경 비밀번호 / CSV 실패 시 계정", font=("Segoe UI", 8), bg=CARD, fg="#888").grid(row=2, column=0, columnspan=3, sticky="w")
+        self._alt_pw_hint_row(acc2)
 
         def row(parent, lbl, var, show=None):
             fr = Frame(parent, bg=CARD)
@@ -2957,8 +3061,95 @@ class App(Tk):
         brow.pack(fill=X, pady=(8, 0))
         Button(brow, text="Zone / 펌웨어 목록", font=("Segoe UI", 10, "bold"), bg=LINK, fg="white",
                relief="flat", padx=10, pady=4, command=self._fwsz_fetch_meta, cursor="hand2").pack(side=LEFT, padx=(0, 6))
-        Button(brow, text="결과 폴더", command=lambda: self._open_path(RESULTS_SZFW)).pack(side=LEFT)
+        Button(brow, text="결과 폴더", font=("Segoe UI", 10),
+               bg=BTN_BG, relief="solid", borderwidth=1, padx=10, pady=5,
+               command=lambda: self._open_path(RESULTS_SZFW), cursor="hand2").pack(side=LEFT)
+        self._latest_result_btn(brow, RESULTS_SZFW)
+        self._log_action_btns(brow, LOG_SZFW, bg=CARD)
         Label(brow, text=RESULT_HINT, font=("Segoe UI", 8), fg="#888", bg=CARD).pack(side=LEFT, padx=(8, 0))
+
+        rule = Frame(outer, bg=CARD, padx=12, pady=8, highlightbackground="#dee2e6", highlightthickness=1)
+        rule.pack(fill=X, pady=(8, 4))
+        Label(rule, text="AP Registration Rule (Default Zone 방지)", font=("Segoe UI", 10, "bold"), bg=CARD).pack(anchor="w")
+        Label(
+            rule,
+            text="SZ에 Rule을 만든 뒤, Provision Tag면 AP에 set provisioning-tag 를 넣고 연동합니다.",
+            font=("Segoe UI", 8), fg="#666", bg=CARD,
+        ).pack(anchor="w")
+        rbtn = Frame(rule, bg=CARD)
+        rbtn.pack(fill=X, pady=(4, 4))
+        Button(rbtn, text="Rule 조회", font=("Segoe UI", 10), bg=LINK, fg="white", relief="flat",
+               padx=10, pady=4, command=self._fwsz_rule_list, cursor="hand2").pack(side=LEFT, padx=(0, 6))
+        Button(rbtn, text="Rule 생성", font=("Segoe UI", 10), bg="#28a745", fg="white", relief="flat",
+               padx=10, pady=4, command=self._fwsz_rule_create, cursor="hand2").pack(side=LEFT, padx=(0, 6))
+        Button(rbtn, text="Rule 삭제", font=("Segoe UI", 10), bg=ACCENT, fg="white", relief="flat",
+               padx=10, pady=4, command=self._fwsz_rule_delete, cursor="hand2").pack(side=LEFT)
+        rlist = Frame(rule, bg=CARD)
+        rlist.pack(fill=X)
+        cols_r = ("priority", "desc", "type", "zone", "value")
+        self.fwsz_rule_tree = ttk.Treeview(rlist, columns=cols_r, show="headings", height=4)
+        for c, w, h in (
+            ("priority", 50, "우선"),
+            ("desc", 160, "설명"),
+            ("type", 120, "유형"),
+            ("zone", 140, "Zone"),
+            ("value", 220, "값"),
+        ):
+            self.fwsz_rule_tree.heading(c, text=h)
+            self.fwsz_rule_tree.column(c, width=w, anchor="w")
+        ysr = Scrollbar(rlist, orient=VERTICAL, command=self.fwsz_rule_tree.yview)
+        self.fwsz_rule_tree.configure(yscrollcommand=ysr.set)
+        self.fwsz_rule_tree.pack(side=LEFT, fill=X, expand=True)
+        ysr.pack(side=LEFT, fill=Y)
+        self.fwsz_rule_tree.bind("<<TreeviewSelect>>", lambda e: self._fwsz_rule_on_select())
+        self._fwsz_rules = []
+
+        rform = Frame(rule, bg=CARD)
+        rform.pack(fill=X, pady=(6, 0))
+        self.fwsz_rule_desc = StringVar()
+        self.fwsz_rule_type = StringVar(value="ProvisionTag")
+        self.fwsz_rule_from = StringVar()
+        self.fwsz_rule_to = StringVar()
+        self.fwsz_rule_net = StringVar()
+        self.fwsz_rule_mask = StringVar(value="255.255.255.0")
+        self.fwsz_rule_tag = StringVar()
+        self.fwsz_apply_tag = BooleanVar(value=True)
+        Label(rform, text="설명", bg=CARD, font=("Segoe UI", 9)).pack(side=LEFT)
+        Entry(rform, textvariable=self.fwsz_rule_desc, width=16, font=("Segoe UI", 9)).pack(side=LEFT, padx=(4, 8))
+        Label(rform, text="유형", bg=CARD, font=("Segoe UI", 9)).pack(side=LEFT)
+        self.fwsz_rule_type_combo = ttk.Combobox(
+            rform, textvariable=self.fwsz_rule_type,
+            values=["ProvisionTag", "IPAddressRange", "Subnet"],
+            state="readonly", width=16, font=("Segoe UI", 9),
+        )
+        self.fwsz_rule_type_combo.pack(side=LEFT, padx=(4, 8))
+        self.fwsz_rule_type_combo.bind("<<ComboboxSelected>>", lambda e: self._fwsz_rule_toggle_fields())
+
+        self.fwsz_rule_fields = Frame(rform, bg=CARD)
+        self.fwsz_rule_fields.pack(side=LEFT, fill=X, expand=True)
+
+        self.fwsz_rule_fr_tag = Frame(self.fwsz_rule_fields, bg=CARD)
+        Label(self.fwsz_rule_fr_tag, text="Tag", bg=CARD, font=("Segoe UI", 9)).pack(side=LEFT)
+        Entry(self.fwsz_rule_fr_tag, textvariable=self.fwsz_rule_tag, width=18, font=("Segoe UI", 9)).pack(side=LEFT, padx=(4, 0))
+
+        self.fwsz_rule_fr_ip = Frame(self.fwsz_rule_fields, bg=CARD)
+        Label(self.fwsz_rule_fr_ip, text="From IP", bg=CARD, font=("Segoe UI", 9)).pack(side=LEFT)
+        Entry(self.fwsz_rule_fr_ip, textvariable=self.fwsz_rule_from, width=14, font=("Segoe UI", 9)).pack(side=LEFT, padx=(4, 8))
+        Label(self.fwsz_rule_fr_ip, text="To IP", bg=CARD, font=("Segoe UI", 9)).pack(side=LEFT)
+        Entry(self.fwsz_rule_fr_ip, textvariable=self.fwsz_rule_to, width=14, font=("Segoe UI", 9)).pack(side=LEFT, padx=(4, 0))
+
+        self.fwsz_rule_fr_net = Frame(self.fwsz_rule_fields, bg=CARD)
+        Label(self.fwsz_rule_fr_net, text="Network Address", bg=CARD, font=("Segoe UI", 9)).pack(side=LEFT)
+        Entry(self.fwsz_rule_fr_net, textvariable=self.fwsz_rule_net, width=14, font=("Segoe UI", 9)).pack(side=LEFT, padx=(4, 8))
+        Label(self.fwsz_rule_fr_net, text="Subnet Mask", bg=CARD, font=("Segoe UI", 9)).pack(side=LEFT)
+        Entry(self.fwsz_rule_fr_net, textvariable=self.fwsz_rule_mask, width=14, font=("Segoe UI", 9)).pack(side=LEFT, padx=(4, 0))
+
+        self.fwsz_apply_tag_chk = Checkbutton(
+            rule, text="업그레이드+연동 시 AP에 provisioning-tag 적용",
+            variable=self.fwsz_apply_tag, bg=CARD, font=("Segoe UI", 9),
+        )
+        self.fwsz_apply_tag_chk.pack(anchor="w", pady=(4, 0))
+        self._fwsz_rule_toggle_fields()
 
         box = Frame(outer, bg=CARD, padx=12, pady=8, highlightbackground="#dee2e6", highlightthickness=1)
         box.pack(fill=X, pady=(8, 4))
@@ -2996,10 +3187,20 @@ class App(Tk):
 
         run = Frame(outer, bg=BG)
         run.pack(fill=X, pady=6)
-        self.fwsz_run_btn = Button(run, text="▶ 업그레이드 + 연동 실행", font=("Segoe UI", 11, "bold"),
-                                   bg=ACCENT, fg="white", relief="flat", padx=16, pady=5,
-                                   command=self._fwsz_start, cursor="hand2")
+        self.fwsz_run_btn = Button(
+            run, text="▶ 업그레이드 + SZ 연동실행(자동IP → 고정IP)",
+            font=("Segoe UI", 10, "bold"),
+            bg=ACCENT, fg="white", relief="flat", padx=12, pady=5,
+            command=lambda: self._fwsz_start(change_ip=True), cursor="hand2",
+        )
         self.fwsz_run_btn.pack(side=LEFT, padx=(0, 8))
+        self.fwsz_run_keep_btn = Button(
+            run, text="▶ 업그레이드 + SZ 연동실행(IP변경안함)",
+            font=("Segoe UI", 10, "bold"),
+            bg="#17a2b8", fg="white", relief="flat", padx=12, pady=5,
+            command=lambda: self._fwsz_start(change_ip=False), cursor="hand2",
+        )
+        self.fwsz_run_keep_btn.pack(side=LEFT, padx=(0, 8))
         self.fwsz_stop_btn = Button(run, text="중지", bg="#6c757d", fg="white", relief="flat", padx=12, pady=5,
                                     command=self._stop_batch, state=DISABLED)
         self.fwsz_stop_btn.pack(side=LEFT)
@@ -3007,15 +3208,7 @@ class App(Tk):
         Label(outer, textvariable=self.fwsz_status, font=("Segoe UI", 9), bg=BG, fg="#555").pack(anchor="w")
         self.progress = ttk.Progressbar(outer, mode="determinate")
         self.progress.pack(fill=X, pady=4)
-        Label(outer, text="실행 로그", font=("Segoe UI", 10, "bold"), bg=BG).pack(anchor="w")
-        log_fr = Frame(outer, bg=CARD)
-        log_fr.pack(fill=BOTH, expand=True)
-        self.log_text = Text(log_fr, font=("Consolas", 9), wrap=WORD, bg="#1e1e1e", fg="#d4d4d4",
-                             height=8, relief="flat", padx=8, pady=8)
-        sb = Scrollbar(log_fr, command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=sb.set)
-        self.log_text.pack(side=LEFT, fill=BOTH, expand=True)
-        sb.pack(side=RIGHT, fill=Y)
+        self._make_log(outer, "실행 로그", 8)
 
     def _fwsz_update_api(self):
         vers = CONTROLLER_API_MAP.get(self.fwsz_ctrl.get(), CONTROLLER_API_MAP.get("수동선택", []))
@@ -3042,9 +3235,9 @@ class App(Tk):
             self._fwsz_zones = zones
             names = []
             for z in zones:
-                nm = z.get("name") or z.get("id") or ""
-                zid = z.get("id") or ""
-                names.append(f"{nm}  [{zid[:8]}]" if zid else nm)
+                nm = (z.get("name") or z.get("id") or "").strip()
+                if nm:
+                    names.append(nm)
             self.fwsz_zone_combo["values"] = names
             if names:
                 self.fwsz_zone.set(names[0])
@@ -3059,27 +3252,224 @@ class App(Tk):
         zones = getattr(self, "_fwsz_zones", [])
         if not api_cli or not zones:
             return
-        sel = self.fwsz_zone.get()
+        sel = (self.fwsz_zone.get() or "").strip()
         zone = None
         for z in zones:
-            nm = z.get("name") or z.get("id") or ""
-            zid = z.get("id") or ""
-            label = f"{nm}  [{zid[:8]}]" if zid else nm
-            if label == sel or nm == sel or zid == sel:
+            nm = (z.get("name") or "").strip()
+            zid = (z.get("id") or "").strip()
+            if sel in (nm, zid) or sel.startswith(nm + " "):
                 zone = z
                 break
         if not zone:
             zone = zones[0]
         try:
-            vers = api_cli.fetch_ap_firmware(zone.get("id") or "")
-            self.fwsz_ver_combo["values"] = vers
-            if vers and self.fwsz_ver.get() not in vers:
-                self.fwsz_ver.set(vers[0])
-            self._log(f"펌웨어 {len(vers)}개: {', '.join(vers[:8])}\n")
+            zid = zone.get("id") or ""
+            vers = api_cli.fetch_ap_firmware(zid)
+            current = api_cli.zone_current_fw(zone)
+            if not current and zid:
+                current = api_cli.zone_current_fw(api_cli.fetch_zone(zid))
+            labels = []
+            for v in vers:
+                labels.append(f"{v} *" if current and v == current else v)
+            if current and current not in vers:
+                labels.insert(0, f"{current} *")
+            self.fwsz_ver_combo["values"] = labels
+            pick = next((lb for lb in labels if lb.endswith(" *")), labels[0] if labels else "")
+            if pick:
+                self.fwsz_ver.set(pick)
+            extra = f"  현재 * {current}" if current else ""
+            self._log(f"펌웨어 {len(vers)}개{extra}: {', '.join(labels[:8])}\n")
         except Exception as e:
             self._log(f"펌웨어 목록 실패: {e}\n")
 
-    def _fwsz_start(self):
+    def _fwsz_cli(self):
+        cli = getattr(self, "_fwsz_api_cli", None)
+        if cli and getattr(cli, "service_ticket", None):
+            return cli
+        host = self.fwsz_api_ip.get().strip()
+        user = self.fwsz_user.get().strip()
+        pw = self.fwsz_pass.get()
+        api = self.fwsz_api.get().strip()
+        if not (host and user and pw and api):
+            messagebox.showwarning("안내", "SZ API IP / Username / Password / API 버전을 입력하세요.")
+            return None
+        cli = SmartZoneAPI(host, user, pw, api)
+        ok, msg = cli.login()
+        if not ok:
+            messagebox.showerror("SZ 로그인 실패", msg)
+            return None
+        self._fwsz_api_cli = cli
+        return cli
+
+    def _fwsz_zone_id(self) -> str:
+        sel = (self.fwsz_zone.get() or "").strip()
+        for z in getattr(self, "_fwsz_zones", []) or []:
+            if sel == (z.get("name") or "").strip() or sel == (z.get("id") or "").strip():
+                return z.get("id") or ""
+        return ""
+
+    def _fwsz_rule_toggle_fields(self):
+        typ = (self.fwsz_rule_type.get() if hasattr(self, "fwsz_rule_type") else "ProvisionTag") or "ProvisionTag"
+        for fr in (
+            getattr(self, "fwsz_rule_fr_tag", None),
+            getattr(self, "fwsz_rule_fr_ip", None),
+            getattr(self, "fwsz_rule_fr_net", None),
+        ):
+            if fr is not None:
+                fr.pack_forget()
+        if typ == "IPAddressRange":
+            if hasattr(self, "fwsz_rule_fr_ip"):
+                self.fwsz_rule_fr_ip.pack(side=LEFT)
+        elif typ == "Subnet":
+            if hasattr(self, "fwsz_rule_fr_net"):
+                self.fwsz_rule_fr_net.pack(side=LEFT)
+        else:
+            if hasattr(self, "fwsz_rule_fr_tag"):
+                self.fwsz_rule_fr_tag.pack(side=LEFT)
+        chk = getattr(self, "fwsz_apply_tag_chk", None)
+        if chk is not None:
+            if typ == "ProvisionTag":
+                chk.pack(anchor="w", pady=(4, 0))
+            else:
+                chk.pack_forget()
+                if hasattr(self, "fwsz_apply_tag"):
+                    self.fwsz_apply_tag.set(False)
+
+    def _fwsz_rule_value(self, item: dict) -> str:
+        t = item.get("type") or ""
+        if t == "IPAddressRange" or item.get("ipAddressRange"):
+            rng = item.get("ipAddressRange") or {}
+            return f"{rng.get('fromIp', '')} ~ {rng.get('toIp', '')}"
+        if t == "Subnet" or item.get("subnet"):
+            sub = item.get("subnet") or {}
+            return f"{sub.get('network') or sub.get('ipAddress') or sub.get('networkAddress') or ''} / {sub.get('subnetMask') or ''}"
+        if t == "ProvisionTag" or item.get("provisionTag"):
+            return str(item.get("provisionTag") or "")
+        gps = item.get("gpsCoordinates") or {}
+        if gps:
+            return f"{gps.get('latitude')},{gps.get('longitude')}"
+        return ""
+
+    def _fwsz_rule_list(self):
+        cli = self._fwsz_cli()
+        if not cli:
+            return
+        try:
+            rules = cli.fetch_ap_rules()
+            detailed = []
+            for r in rules:
+                rid = r.get("id") or ""
+                full = cli.fetch_ap_rule(rid) if rid else r
+                if not isinstance(full, dict) or not full.get("id"):
+                    full = r
+                detailed.append(full)
+            self._fwsz_rules = detailed
+            tree = getattr(self, "fwsz_rule_tree", None)
+            if tree:
+                tree.delete(*tree.get_children())
+                for it in detailed:
+                    zone = ""
+                    mz = it.get("mobilityZone") or {}
+                    if isinstance(mz, dict):
+                        zone = mz.get("name") or mz.get("id") or ""
+                    tree.insert("", END, iid=it.get("id") or "", values=(
+                        it.get("priority") or "",
+                        it.get("description") or "",
+                        it.get("type") or "",
+                        zone,
+                        self._fwsz_rule_value(it),
+                    ))
+            self._log(f"AP Registration Rule {len(detailed)}개 조회\n")
+        except Exception as e:
+            messagebox.showerror("오류", str(e))
+
+    def _fwsz_rule_on_select(self):
+        tree = getattr(self, "fwsz_rule_tree", None)
+        if not tree:
+            return
+        sel = tree.selection()
+        if not sel:
+            return
+        rid = sel[0]
+        item = next((x for x in getattr(self, "_fwsz_rules", []) if x.get("id") == rid), None)
+        if not item:
+            return
+        self.fwsz_rule_desc.set(item.get("description") or "")
+        self.fwsz_rule_type.set(item.get("type") or "ProvisionTag")
+        tag = item.get("provisionTag") or ""
+        if tag:
+            self.fwsz_rule_tag.set(tag)
+        rng = item.get("ipAddressRange") or {}
+        if rng:
+            self.fwsz_rule_from.set(rng.get("fromIp") or "")
+            self.fwsz_rule_to.set(rng.get("toIp") or "")
+        sub = item.get("subnet") or {}
+        if sub:
+            self.fwsz_rule_net.set(sub.get("network") or sub.get("ipAddress") or "")
+            self.fwsz_rule_mask.set(sub.get("subnetMask") or self.fwsz_rule_mask.get())
+        self._fwsz_rule_toggle_fields()
+
+    def _fwsz_rule_create(self):
+        cli = self._fwsz_cli()
+        if not cli:
+            return
+        zid = self._fwsz_zone_id()
+        if not zid:
+            messagebox.showwarning("안내", "먼저 Zone / 펌웨어 목록으로 Zone을 선택하세요.")
+            return
+        typ = (self.fwsz_rule_type.get() or "ProvisionTag").strip()
+        desc = (self.fwsz_rule_desc.get() or "").strip() or f"rule-{typ}"
+        body = {"description": desc, "type": typ, "mobilityZone": {"id": zid}}
+        if typ == "ProvisionTag":
+            tag = (self.fwsz_rule_tag.get() or "").strip()
+            if not tag:
+                messagebox.showwarning("안내", "Provision Tag 값을 입력하세요.")
+                return
+            body["provisionTag"] = tag
+        elif typ == "IPAddressRange":
+            a = (self.fwsz_rule_from.get() or "").strip()
+            b = (self.fwsz_rule_to.get() or "").strip()
+            if not a or not b:
+                messagebox.showwarning("안내", "From IP / To IP를 입력하세요.")
+                return
+            body["ipAddressRange"] = {"fromIp": a, "toIp": b}
+        elif typ == "Subnet":
+            net = (self.fwsz_rule_net.get() or "").strip()
+            mask = (self.fwsz_rule_mask.get() or "").strip()
+            if not net or not mask:
+                messagebox.showwarning("안내", "Subnet 주소와 마스크를 입력하세요.")
+                return
+            body["subnet"] = {"network": net, "subnetMask": mask}
+        else:
+            messagebox.showwarning("안내", "지원하지 않는 유형입니다.")
+            return
+        ok, resp = cli.create_ap_rule(body)
+        if ok:
+            self._log(f"Rule 생성 성공: {desc} / {typ}\n")
+            self._fwsz_rule_list()
+        else:
+            messagebox.showerror("Rule 생성 실패", str(resp))
+
+    def _fwsz_rule_delete(self):
+        cli = self._fwsz_cli()
+        if not cli:
+            return
+        tree = getattr(self, "fwsz_rule_tree", None)
+        sel = tree.selection() if tree else ()
+        if not sel:
+            messagebox.showwarning("안내", "삭제할 Rule을 리스트에서 선택하세요.")
+            return
+        rid = sel[0]
+        if not messagebox.askyesno("확인", "선택한 AP Registration Rule을 삭제할까요?"):
+            return
+        ok, resp = cli.delete_ap_rule(rid)
+        if ok:
+            self._log(f"Rule 삭제: {rid}\n")
+            self._fwsz_rule_list()
+        else:
+            messagebox.showerror("삭제 실패", str(resp))
+
+    def _fwsz_start(self, change_ip: bool = True):
         if self._worker and self._worker.is_alive():
             messagebox.showwarning("안내", "이미 실행 중입니다.")
             return
@@ -3087,7 +3477,7 @@ class App(Tk):
             messagebox.showwarning("안내", "먼저 AP CSV를 업로드하세요.")
             return
         host = self.fwsz_api_ip.get().strip()
-        ver = self.fwsz_ver.get().strip()
+        ver = self.fwsz_ver.get().replace("*", "").strip()
         if not host or not ver:
             messagebox.showwarning("안내", "SZ API IP와 펌웨어 버전을 입력하세요.")
             return
@@ -3095,17 +3485,28 @@ class App(Tk):
             getattr(self, "fwsz_user2", None), getattr(self, "fwsz_pass2", None)
         ):
             return
-        if not messagebox.askyesno("확인", f"{len(self._csv_rows)} 대\nSZ {host}\n버전 {ver}\n업그레이드 + 연동을 시작할까요?"):
+        mode = "자동IP → 고정IP" if change_ip else "IP변경안함"
+        if not messagebox.askyesno(
+            "확인",
+            f"{len(self._csv_rows)} 대\nSZ {host}\n버전 {ver}\n업그레이드 + SZ 연동 ({mode}) 시작할까요?",
+        ):
             return
         user2 = (self.fwsz_user2.get() or "").strip()
         pass2 = (self.fwsz_pass2.get() or "").strip()
+        ptag = ""
+        if getattr(self, "fwsz_apply_tag", None) and self.fwsz_apply_tag.get():
+            ptag = (self.fwsz_rule_tag.get() or "").strip()
         rows = list(self._csv_rows)
         self._stop_flag = False
         self.fwsz_run_btn.config(state=DISABLED)
+        if hasattr(self, "fwsz_run_keep_btn"):
+            self.fwsz_run_keep_btn.config(state=DISABLED)
         self.fwsz_stop_btn.config(state=NORMAL)
         self.progress["value"] = 0
         self.progress["maximum"] = len(rows)
-        self._log(f"\n===== SZ 펌웨어 업그레이드 {len(rows)} 대 / {ver} / {host} =====\n")
+        self._log(
+            f"\n===== SZ 펌웨어 업그레이드 {len(rows)} 대 / {ver} / {host} / {mode} =====\n"
+        )
 
         def work():
             results = []
@@ -3131,6 +3532,8 @@ class App(Tk):
                         debug=True,
                         fw_host=host,
                         fw_file=ver,
+                        fw_change_ip=change_ip,
+                        provision_tag=ptag,
                         standard_password=pass2,
                         fallback_user=user2,
                         try_factory=False,
@@ -3153,6 +3556,7 @@ class App(Tk):
                         w.writerow([r.get("ip"), r.get("status"), r.get("message"),
                                     r.get("model"), r.get("serial"), r.get("mac")])
                 keep_latest_results(RESULTS_SZFW)
+                self._save_session_log(LOG_SZFW, "fw_sz")
                 ok_n = sum(1 for r in results if r.get("status") == "OK")
                 self._log_queue.put(f"\n===== 완료: 성공 {ok_n}/{len(results)} =====\n결과: {out}\n")
                 self.after(0, lambda: self.fwsz_status.set(f"완료 성공 {ok_n}/{len(results)}"))
@@ -3160,6 +3564,7 @@ class App(Tk):
             except Exception as e:
                 self._log_queue.put(f"결과 저장 실패: {e}\n")
             self.after(0, lambda: self.fwsz_run_btn.config(state=NORMAL))
+            self.after(0, lambda: getattr(self, "fwsz_run_keep_btn", self.fwsz_run_btn).config(state=NORMAL))
             self.after(0, lambda: self.fwsz_stop_btn.config(state=DISABLED))
 
         self._worker = threading.Thread(target=work, daemon=True)
@@ -3173,7 +3578,7 @@ class App(Tk):
         outer = self._scroll_page(padx=20, pady=16)
         self._back_btn(outer)
         Label(outer, text="7. AP 펌웨어 자동 업그레이드", font=("Segoe UI", 14, "bold"), fg=ACCENT, bg=BG).pack(anchor="w")
-        Label(outer, text="CSV AP SSH 접속 → 모델별 .bl7 매칭 → TFTP fw update → reboot",
+        Label(outer, text="CSV AP SSH 접속 → 선택한 .bl7 → TFTP fw update → reboot",
               font=("Segoe UI", 9), fg="#666", bg=BG).pack(anchor="w", pady=(2, 8))
 
         form = Frame(outer, bg=CARD, padx=12, pady=8, highlightbackground="#dee2e6", highlightthickness=1)
@@ -3190,7 +3595,7 @@ class App(Tk):
         self.fw_server_ip = StringVar(value="")
         self.fw_server_port = StringVar(value="69")
         self.fwup_proto = StringVar(value="tftp")
-        self.fwup_file = StringVar(value="자동 매칭 (AP 모델 = bl7 파일명)")
+        self.fwup_file = StringVar(value="펌웨어 파일 선택")
         self.fwup_factory = BooleanVar(value=True)
         self.fwup_user2 = StringVar(value="")
         self.fwup_pass2 = StringVar(value="")
@@ -3229,11 +3634,11 @@ class App(Tk):
         Label(right, text="Password", width=10, anchor="w", bg=CARD, font=("Segoe UI", 10)).grid(row=1, column=0, sticky="w", pady=2)
         self.fwup_pass2_entry = Entry(right, textvariable=self.fwup_pass2, width=16, font=("Segoe UI", 10), show="*")
         self.fwup_pass2_entry.grid(row=1, column=1, sticky="w", pady=2)
-        BalloonTip(self.fwup_pass2_entry, PW_RULE_KO)
+        self.fwup_pass2_tip = BalloonTip(self.fwup_pass2_entry, PW_RULE_KO, enabled=self._alt_pw_complex_on())
         self.fwup_pass2_show = BooleanVar(value=False)
         Checkbutton(right, text="표시", variable=self.fwup_pass2_show, bg=CARD,
                     command=lambda: self.fwup_pass2_entry.config(show="" if self.fwup_pass2_show.get() else "*")).grid(row=1, column=2, sticky="w", padx=(6, 0))
-        Label(right, text="강제변경 비밀번호 / CSV 실패 시 계정", font=("Segoe UI", 8), bg=CARD, fg="#888").grid(row=2, column=0, columnspan=3, sticky="w")
+        self._alt_pw_hint_row(right)
 
         Checkbutton(form, text="완료 시 set factory + reboot (동일 버전은 생략)", variable=self.fwup_factory, bg=CARD).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
         brow = Frame(form, bg=CARD)
@@ -3241,7 +3646,7 @@ class App(Tk):
         Button(brow, text="펌웨어 업로드 (최대 10개씩)", font=("Segoe UI", 10, "bold"), bg=LINK, fg="white",
                relief="flat", padx=10, pady=4, command=self._fw_upload, cursor="hand2").pack(side=LEFT, padx=(0, 6))
         Button(brow, text="내장 TFTP 시작", font=("Segoe UI", 10, "bold"), bg="#17a2b8", fg="white", relief="flat",
-               padx=10, pady=4, command=self._fw_start_builtin_tftp, cursor="hand2").pack(side=LEFT, padx=(0, 6))
+               padx=10, pady=4, command=lambda: self._fw_start_builtin_tftp("upgrade"), cursor="hand2").pack(side=LEFT, padx=(0, 6))
         Button(brow, text="TFTP 중지", font=("Segoe UI", 10),
                bg=BTN_BG, relief="solid", borderwidth=1, padx=10, pady=5,
                command=self._fw_stop_builtin_tftp, cursor="hand2").pack(side=LEFT, padx=(0, 6))
@@ -3251,6 +3656,8 @@ class App(Tk):
         Button(brow, text="결과 폴더", font=("Segoe UI", 10),
                bg=BTN_BG, relief="solid", borderwidth=1, padx=10, pady=5,
                command=lambda: self._open_path(RESULTS_FW), cursor="hand2").pack(side=LEFT)
+        self._latest_result_btn(brow, RESULTS_FW)
+        self._log_action_btns(brow, LOG_FW, bg=CARD)
         Label(brow, text=RESULT_HINT, font=("Segoe UI", 8), fg="#888", bg=CARD).pack(side=LEFT, padx=(8, 0))
 
         # 메뉴 6과 동일한 CSV 업로드 UI
@@ -3299,16 +3706,7 @@ class App(Tk):
         Label(outer, textvariable=self.fwup_status, font=("Segoe UI", 9), bg=BG, fg="#555").pack(anchor="w")
         self.progress = ttk.Progressbar(outer, mode="determinate")
         self.progress.pack(fill=X, pady=4)
-
-        Label(outer, text="실행 로그", font=("Segoe UI", 10, "bold"), bg=BG).pack(anchor="w")
-        log_fr = Frame(outer, bg=CARD)
-        log_fr.pack(fill=BOTH, expand=True)
-        self.log_text = Text(log_fr, font=("Consolas", 9), wrap=WORD, bg="#1e1e1e", fg="#d4d4d4",
-                             height=8, relief="flat", padx=8, pady=8)
-        sb = Scrollbar(log_fr, command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=sb.set)
-        self.log_text.pack(side=LEFT, fill=BOTH, expand=True)
-        sb.pack(side=RIGHT, fill=Y)
+        self._make_log(outer, "실행 로그", 8)
 
     def _fwup_start(self):
         if self._worker and self._worker.is_alive():
@@ -3336,8 +3734,11 @@ class App(Tk):
             return
         if not messagebox.askyesno("확인", f"{len(self._csv_rows)} 대 AP 펌웨어 업그레이드를 시작할까요?"):
             return
-        sel = self.fwup_file.get()
-        fw_file = "AUTO" if sel.startswith("자동") else sel.split()[0]
+        sel = (self.fwup_file.get() or "").strip()
+        fw_file = sel.split()[0] if sel else ""
+        if not fw_file.lower().endswith(".bl7"):
+            messagebox.showwarning("안내", "펌웨어 파일(.bl7)을 선택하세요.")
+            return
         proto = self.fwup_proto.get() or "tftp"
         port = self.fw_server_port.get().strip() or "69"
         factory = bool(self.fwup_factory.get())
@@ -3395,6 +3796,7 @@ class App(Tk):
                         w.writerow([r.get("ip"), r.get("status"), r.get("message"),
                                     r.get("model"), r.get("serial"), r.get("mac")])
                 keep_latest_results(RESULTS_FW)
+                self._save_session_log(LOG_FW, "fw_upgrade")
                 ok_n = sum(1 for r in results if r.get("status") == "OK")
                 self._log_queue.put(f"\n===== 완료: 성공 {ok_n}/{len(results)} =====\n결과: {out}\n")
                 self.after(0, lambda: self.fwup_status.set(f"완료 성공 {ok_n}/{len(results)}"))
@@ -3413,7 +3815,7 @@ class App(Tk):
         self._log(f"목록 새로고침: .bl7 {n}개 ({FW_DIR})\n")
 
     def _fwup_refresh_combo(self):
-        items = ["자동 매칭 (AP 모델 = bl7 파일명)"]
+        items = []
         if FW_DIR.is_dir():
             for f in sorted(FW_DIR.glob("*.bl7")):
                 m, v = parse_bl7_name(f)
@@ -3421,8 +3823,14 @@ class App(Tk):
         if hasattr(self, "fwup_combo"):
             self.fwup_combo["values"] = items
         cur = self.fwup_file.get() if hasattr(self, "fwup_file") else ""
-        if cur not in items:
-            self.fwup_file.set(items[0])
+        if items:
+            if cur not in items:
+                self.fwup_file.set(items[0])
+        else:
+            items = ["펌웨어 파일 선택"]
+            if hasattr(self, "fwup_combo"):
+                self.fwup_combo["values"] = items
+            self.fwup_file.set("펌웨어 파일 선택")
 
     # ------------------------------------------------------------------
     # 메뉴 8: 펌웨어 CLI 명령어 생성 (bl7 업로드)
@@ -3493,7 +3901,7 @@ class App(Tk):
         Button(
             btn_row, text="▶ 내장 TFTP 시작", font=("Segoe UI", 10, "bold"),
             bg="#17a2b8", fg="white", relief="flat", padx=14, pady=5,
-            command=self._fw_start_builtin_tftp, cursor="hand2",
+            command=lambda: self._fw_start_builtin_tftp("list"), cursor="hand2",
         ).pack(side=LEFT, padx=(0, 8))
         Button(
             btn_row, text="TFTP 중지", font=("Segoe UI", 10),
@@ -3506,10 +3914,11 @@ class App(Tk):
             command=lambda: self._open_path(FW_DIR), cursor="hand2",
         ).pack(side=LEFT, padx=(0, 8))
         Button(
-            btn_row, text="펌웨어 스크립트 보기", font=("Segoe UI", 10),
-            bg=BTN_BG, relief="solid", borderwidth=1, padx=12, pady=5,
+            btn_row, text="펌웨어 스크립트 보기", font=("Segoe UI", 10, "bold"),
+            bg="#fd7e14", fg="white", relief="flat", padx=12, pady=5,
             command=self._fw_open_index, cursor="hand2",
         ).pack(side=LEFT)
+        self._log_action_btns(btn_row, LOG_FWCLI, bg=CARD)
 
         self.fw_info = StringVar(value=self._fw_scan_info())
         Label(outer, textvariable=self.fw_info, font=("Segoe UI", 9), bg=BG, fg="#555").pack(
@@ -3546,18 +3955,7 @@ class App(Tk):
         list_fr.grid_rowconfigure(0, weight=1)
         list_fr.grid_columnconfigure(0, weight=1)
         self._fw_refresh_list()
-
-        Label(outer, text="로그", font=("Segoe UI", 10, "bold"), bg=BG).pack(anchor="w")
-        log_fr = Frame(outer, bg=CARD)
-        log_fr.pack(fill=X)
-        self.log_text = Text(
-            log_fr, font=("Consolas", 9), height=8, wrap=WORD,
-            bg="#1e1e1e", fg="#d4d4d4", relief="flat", padx=8, pady=8,
-        )
-        sb2 = Scrollbar(log_fr, command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=sb2.set)
-        self.log_text.pack(side=LEFT, fill=BOTH, expand=True)
-        sb2.pack(side=RIGHT, fill=Y)
+        self._make_log(outer, "로그", 8)
 
     def _fw_scan_info(self) -> str:
         FW_DIR.mkdir(exist_ok=True)
@@ -3609,7 +4007,7 @@ class App(Tk):
         messagebox.showinfo(
             "업로드",
             f"{ok_n}개 파일을 firmware 폴더에 저장했습니다.\n"
-            f"메뉴 7에서는 파일 목록에서 선택하거나 자동 매칭하면 됩니다.",
+            f"메뉴 7 펌웨어 파일 목록에서 선택하세요.",
         )
 
     def _fw_generate(self):
@@ -3654,8 +4052,9 @@ class App(Tk):
                 f"{result['message']}\n\n"
                 f"서버: {result.get('server')}\n"
                 f"경로: {result.get('location_path')}\n\n"
-                f"index.html 을 브라우저로 열어 모델별 CLI를 복사하세요.",
+                f"「펌웨어 스크립트 보기」를 눌러 목록을 열고 CLI를 복사하세요.",
             )
+            self._save_session_log(LOG_FWCLI, "fw_cli")
             if not self._tftp_is_running():
                 messagebox.showwarning(
                     "안내",
@@ -3702,7 +4101,7 @@ class App(Tk):
         srv = getattr(self, "_tftp_server", None)
         return bool(srv and getattr(srv, "running", False))
 
-    def _fw_start_builtin_tftp(self):
+    def _fw_start_builtin_tftp(self, kind="upgrade"):
         """설정 불필요 — firmware 폴더를 바로 공유하는 내장 TFTP"""
         port_s = self.fw_server_port.get().strip() or "69"
         try:
@@ -3724,15 +4123,27 @@ class App(Tk):
             self._tftp_server = srv
             ip = self.fw_server_ip.get().strip() or "(미입력)"
             self._log(f"내장 TFTP 서버 시작: 0.0.0.0:{port} → {FW_DIR}\n")
+            if kind == "list":
+                how = (
+                    "「목록 생성」 후 AP에서 fw update 하면 됩니다.\n"
+                    "포트 69 바인드 실패 시 관리자 권한으로 실행하거나\n"
+                    "포트를 6969 등으로 바꾸세요."
+                )
+            else:
+                how = (
+                    "TFTP 서버 IP를 확인(또는 IP 감지)한 뒤\n"
+                    "CSV를 올리고 「업그레이드 실행」하면\n"
+                    "AP가 이 TFTP에서 .bl7을 받아 업그레이드합니다.\n"
+                    "포트 69 바인드 실패 시 관리자 권한으로 실행하거나\n"
+                    "포트를 6969 등으로 바꾸세요."
+                )
             messagebox.showinfo(
                 "내장 TFTP 서버",
                 f"TFTP 서버가 시작되었습니다. (설정 불필요)\n\n"
                 f"• 공유 폴더: {FW_DIR}\n"
                 f"• 포트: {port}\n"
                 f"• AP에 넣을 서버 IP: {ip}\n\n"
-                f"「목록 생성」 후 AP에서 fw update 하면 됩니다.\n"
-                f"포트 69 바인드 실패 시 관리자 권한으로 실행하거나\n"
-                f"포트를 6969 등으로 바꾸세요.",
+                f"{how}",
             )
         except OSError as e:
             messagebox.showerror("TFTP 시작 실패", str(e))
@@ -3806,19 +4217,8 @@ class App(Tk):
             command=self._single_connect, cursor="hand2",
         )
         self.s_connect_btn.pack(side=LEFT, padx=(0, 8))
-
-        Label(outer, text="로그", font=("Segoe UI", 10, "bold"), bg=BG).pack(anchor="w", pady=(12, 2))
-        log_fr = Frame(outer, bg=CARD)
-        log_fr.pack(fill=BOTH, expand=True)
-        self.log_text = Text(
-            log_fr, font=("Consolas", 9), wrap=WORD, bg="#1e1e1e", fg="#d4d4d4",
-            relief="flat", padx=8, pady=8,
-        )
-        sb = Scrollbar(log_fr, command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=sb.set)
-        self.log_text.pack(side=LEFT, fill=BOTH, expand=True)
-        sb.pack(side=RIGHT, fill=Y)
-
+        self._log_action_btns(btn_row, LOG_SINGLE, bg=CARD)
+        self._make_log(outer, "로그", 10)
         cmd_fr = Frame(outer, bg=BG)
         cmd_fr.pack(fill=X, pady=(8, 0))
         Label(cmd_fr, text="명령:", bg=BG, font=("Segoe UI", 10)).pack(side=LEFT)
@@ -3846,7 +4246,7 @@ class App(Tk):
             sys.stdout = TextRedirector(self._log_queue)
             ssh = None
             try:
-                ssh = RuckusSSH(timeout=20, debug=True, verbose=True)
+                ssh = RuckusSSH(timeout=10, debug=True, verbose=True)
                 ok, msg = ssh.connect(
                     ip,
                     username=self.s_user.get().strip() or DEFAULT_USER,
@@ -3873,6 +4273,7 @@ class App(Tk):
             finally:
                 sys.stdout = old
                 self.after(0, lambda: self.s_connect_btn.config(state=NORMAL))
+                self._save_session_log(LOG_SINGLE, "single")
 
         self._worker = threading.Thread(target=work, daemon=True)
         self._worker.start()
@@ -3896,6 +4297,7 @@ class App(Tk):
                 self._log_queue.put(f"오류: {e}\n")
             finally:
                 sys.stdout = old
+                self._save_session_log(LOG_SINGLE, "single_cmd")
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -3925,9 +4327,93 @@ class App(Tk):
             bg=BTN_BG, relief="solid", borderwidth=1, padx=12, pady=8,
             command=self._open_oui_file, cursor="hand2",
         ).pack(side=LEFT)
-        self.log_text = Text(outer, font=("Consolas", 9), height=20, wrap=WORD,
-                             bg="#1e1e1e", fg="#d4d4d4", relief="flat", padx=8, pady=8)
-        self.log_text.pack(fill=BOTH, expand=True)
+        self._log_action_btns(btn_row, LOG_OUI, bg=BG)
+        self._make_log(outer, "로그", 20)
+
+    def _latest_result_btn(self, parent, folder: Path, suffixes=None):
+        Button(
+            parent, text="최근 결과 다운로드", font=("Segoe UI", 10),
+            bg="#28a745", fg="white", relief="flat", padx=12, pady=5,
+            command=lambda: self._download_latest_results(folder, suffixes),
+            cursor="hand2",
+        ).pack(side=LEFT, padx=(6, 0))
+
+    def _log_action_btns(self, parent, folder: Path, bg=None):
+        """결과 버튼 오른쪽에 붙는 작은 로그 폴더/최근 로그 버튼."""
+        bg = bg if bg is not None else CARD
+        Button(
+            parent, text="로그 폴더", font=("Segoe UI", 10),
+            bg="#e2f22e", fg="#333", relief="solid", borderwidth=1, padx=10, pady=5,
+            command=lambda f=folder: self._open_path(f), cursor="hand2",
+        ).pack(side=LEFT, padx=(6, 0))
+        Button(
+            parent, text="최근 로그", font=("Segoe UI", 10),
+            bg="#ced4da", fg="#333", relief="solid", borderwidth=1, padx=10, pady=5,
+            command=lambda f=folder: self._download_latest_log(f), cursor="hand2",
+        ).pack(side=LEFT, padx=(6, 0))
+
+    def _download_latest_log(self, folder: Path):
+        folder = Path(folder)
+        files = list(folder.glob("*.log")) if folder.is_dir() else []
+        if not files:
+            messagebox.showwarning("안내", "다운로드할 로그가 없습니다. 먼저 실행하세요.")
+            return
+        src = max(files, key=lambda p: p.stat().st_mtime)
+        dest = filedialog.asksaveasfilename(
+            title="최근 로그 저장",
+            initialfile=src.name,
+            defaultextension=".log",
+            filetypes=[("Log", "*.log"), ("Text", "*.txt"), ("All", "*.*")],
+        )
+        if not dest:
+            return
+        try:
+            shutil.copy2(src, dest)
+            messagebox.showinfo("다운로드", f"최근 로그 저장:\n{dest}")
+        except Exception as e:
+            messagebox.showerror("다운로드 실패", str(e))
+
+    def _download_latest_results(self, folder: Path, suffixes=None):
+        """가장 마지막에 생성된 결과 파일을 사용자가 고른 폴더로 복사."""
+        folder = Path(folder)
+        if not folder.is_dir():
+            messagebox.showwarning("안내", "결과 폴더가 없습니다. 먼저 조회하세요.")
+            return
+        cands = []
+        for f in folder.iterdir():
+            if not f.is_file():
+                continue
+            if suffixes and not any(f.name.endswith(s) for s in suffixes):
+                continue
+            cands.append(f)
+        if not cands:
+            messagebox.showwarning("안내", "다운로드할 결과 파일이 없습니다. 먼저 조회하세요.")
+            return
+        newest = max(cands, key=lambda p: p.stat().st_mtime)
+        files = [newest]
+        if suffixes:
+            for s in suffixes:
+                if newest.name.endswith(s):
+                    prefix = newest.name[: -len(s)]
+                    files = [folder / (prefix + x) for x in suffixes if (folder / (prefix + x)).is_file()]
+                    break
+        dest = filedialog.askdirectory(title="저장할 폴더 선택")
+        if not dest:
+            return
+        dest = Path(dest)
+        names = []
+        for src in files:
+            try:
+                shutil.copy2(src, dest / src.name)
+                names.append(src.name)
+            except Exception as e:
+                messagebox.showerror("다운로드 실패", f"{src.name}\n{e}")
+                return
+        messagebox.showinfo("다운로드", "최근 결과 저장:\n" + "\n".join(names) + f"\n\n{dest}")
+        try:
+            os.startfile(str(dest.resolve()))
+        except Exception:
+            pass
 
     def _hint_result(self, parent, bg=None):
         Label(parent, text=RESULT_HINT, font=("Segoe UI", 8),
@@ -4045,6 +4531,7 @@ class App(Tk):
             with open(txt_path, "w", encoding="utf-8") as f:
                 f.write(header + body)
             self._log_queue.put(f"완료: {len(lines)} entries\n  {txt_path}\n")
+            self._save_session_log(LOG_OUI, "oui")
             if len(lines) == 0:
                 self._log_queue.put("경고: 파싱된 OUI가 0건입니다. 응답 형식이 변경되었을 수 있습니다.\n")
 
@@ -4053,6 +4540,32 @@ class App(Tk):
     # ------------------------------------------------------------------
     # 로그 헬퍼
     # ------------------------------------------------------------------
+    def _save_session_log(self, folder: Path, prefix: str):
+        """실행 로그를 log/하위폴더에 저장하고 5개만 유지."""
+        def _do():
+            try:
+                while True:
+                    s = self._log_queue.get_nowait()
+                    self._log(s)
+            except queue.Empty:
+                pass
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                path = folder / f"{prefix}_{ts}.log"
+                text = ""
+                if hasattr(self, "log_text"):
+                    text = self.log_text.get("1.0", "end-1c")
+                path.write_text(text or "", encoding="utf-8")
+                keep_latest_results(folder, keep=RESULT_KEEP)
+                self._log(f"로그 저장: {path}\n")
+            except Exception as e:
+                try:
+                    self._log(f"로그 저장 실패: {e}\n")
+                except Exception:
+                    pass
+        self.after(0, _do)
+
     def _log(self, msg: str):
         if hasattr(self, "log_text"):
             self.log_text.insert(END, msg)

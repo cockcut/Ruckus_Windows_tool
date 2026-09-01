@@ -79,7 +79,9 @@ class SimpleTftpServer:
                 data, addr = self._sock.recvfrom(516)
             except socket.timeout:
                 continue
-            except OSError:
+            except OSError as e:
+                if self._is_client_reset(e):
+                    continue
                 break
             if not data or len(data) < 2:
                 continue
@@ -129,20 +131,25 @@ class SimpleTftpServer:
                     chunk = f.read(512)
                     packet = struct.pack("!HH", OPCODE_DATA, block) + chunk
                     for _ in range(5):
-                        sock.sendto(packet, addr)
                         try:
+                            sock.sendto(packet, addr)
                             ack, ack_addr = sock.recvfrom(516)
-                            if ack_addr[0] != addr[0]:
-                                continue
-                            if len(ack) >= 4:
-                                op, bn = struct.unpack("!HH", ack[:4])
-                                if op == OPCODE_ACK and bn == block:
-                                    break
-                                if op == OPCODE_ERROR:
-                                    self.log(f"클라이언트 오류: {filename}")
-                                    return
                         except socket.timeout:
                             continue
+                        except OSError as e:
+                            if self._is_client_reset(e):
+                                # AP가 전송 종료 후 UDP를 끊으면 Windows가 10054를 냄
+                                return
+                            raise
+                        if ack_addr[0] != addr[0]:
+                            continue
+                        if len(ack) >= 4:
+                            op, bn = struct.unpack("!HH", ack[:4])
+                            if op == OPCODE_ACK and bn == block:
+                                break
+                            if op == OPCODE_ERROR:
+                                self.log(f"클라이언트 오류: {filename}")
+                                return
                     else:
                         self.log(f"전송 타임아웃: {filename} block={block}")
                         return
@@ -151,10 +158,25 @@ class SimpleTftpServer:
                         break
                     block = (block + 1) & 0xFFFF
         except OSError as e:
-            self.log(f"파일 오류: {e}")
-            self._send_error(addr, ERR_ACCESS, str(e))
+            if self._is_client_reset(e):
+                return
+            self.log(f"TFTP 전송 오류: {e}")
+            try:
+                self._send_error(addr, ERR_ACCESS, str(e))
+            except OSError:
+                pass
         finally:
             sock.close()
+
+    @staticmethod
+    def _is_client_reset(e: BaseException) -> bool:
+        if isinstance(e, ConnectionResetError):
+            return True
+        win = getattr(e, "winerror", None)
+        if win in (10054, 10053, 10060):
+            return True
+        err = getattr(e, "errno", None)
+        return err in (10054, 10053, 10060, 104, 32)
 
     def _send_error(self, addr, code: int, msg: str) -> None:
         if not self._sock:

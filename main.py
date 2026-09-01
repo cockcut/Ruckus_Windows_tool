@@ -219,7 +219,7 @@ def menu_single_test():
         return
 
     print("\n연결 테스트 중... (인증 전 과정이 아래에 표시됩니다)\n")
-    ssh = RuckusSSH(timeout=20, debug=True, verbose=True)
+    ssh = RuckusSSH(timeout=10, debug=True, verbose=True)
     # password=None/빈값이면 sp-admin → Ruckus!234 순서로 자동 시도
     ok, msg = ssh.connect(
         ip,

@@ -113,6 +113,8 @@ class SmartZoneAPI:
                 r = self.session.patch(url, data=payload, timeout=self.timeout)
             elif m == "PUT":
                 r = self.session.put(url, data=payload, timeout=self.timeout)
+            elif m == "DELETE":
+                r = self.session.delete(url, data=payload, timeout=self.timeout)
             else:
                 r = self.session.get(url, timeout=self.timeout)
             try:
@@ -172,6 +174,27 @@ class SmartZoneAPI:
             return resp
         return []
 
+    def fetch_zone(self, zone_id: str) -> dict:
+        code, resp = self._request("GET", self._url(f"/rkszones/{zone_id}"))
+        return resp if isinstance(resp, dict) else {}
+
+    def zone_current_fw(self, zone: dict) -> str:
+        if not isinstance(zone, dict):
+            return ""
+        for key in (
+            "firmwareVersion",
+            "apFirmwareVersion",
+            "apFirmware",
+            "zoneFirmwareVersion",
+            "version",
+        ):
+            val = zone.get(key)
+            if isinstance(val, dict):
+                val = val.get("firmwareVersion") or val.get("version") or ""
+            if val:
+                return str(val).strip()
+        return ""
+
     def fetch_ap_firmware(self, zone_id: str) -> List[str]:
         code, resp = self._request("GET", self._url(f"/rkszones/{zone_id}/apFirmware"))
         items = []
@@ -187,6 +210,28 @@ class SmartZoneAPI:
             if ver and it.get("supported", True):
                 out.append(str(ver))
         return out
+
+    def fetch_ap_rules(self) -> List[dict]:
+        code, resp = self._request("GET", self._url("/apRules"))
+        if isinstance(resp, dict) and isinstance(resp.get("list"), list):
+            return resp["list"]
+        if isinstance(resp, list):
+            return resp
+        return []
+
+    def fetch_ap_rule(self, rule_id: str) -> dict:
+        code, resp = self._request("GET", self._url(f"/apRules/{rule_id}"))
+        return resp if isinstance(resp, dict) else {}
+
+    def create_ap_rule(self, payload: dict) -> Tuple[bool, Any]:
+        code, resp = self._request("POST", self._url("/apRules"), payload)
+        ok = code in (200, 201, 204)
+        return ok, resp
+
+    def delete_ap_rule(self, rule_id: str) -> Tuple[bool, Any]:
+        code, resp = self._request("DELETE", self._url(f"/apRules/{rule_id}"))
+        ok = code in (200, 201, 204)
+        return ok, resp
 
     def fetch_dpsk_list(self, zone_id: str) -> List[dict]:
         code, resp = self._request("GET", self._url(f"/rkszones/{zone_id}/dpsk"))
@@ -519,31 +564,57 @@ def flatten_bssids(bssid_data: List[dict], ap_data: List[dict]) -> List[dict]:
     return rows
 
 
+# 원본 PHP AP 리스트 / CSV 열 순서
+AP_ROW_FIELDS = (
+    "AP_Name", "IP", "AP_MAC", "serial", "Model",
+    "channel2G", "channel5G", "channel6G",
+    "status", "config_status", "firmwareVer",
+    "airtime2G", "airtime5G", "airtime6G",
+    "noise2G", "noise5G", "noise6G",
+    "eirp2G", "eirp5G", "eirp6G",
+    "Clients", "poePort", "ZoneDomain",
+)
+
+
+def _ap_val(ap: dict, *keys):
+    for k in keys:
+        if k in ap and ap[k] is not None and ap[k] != "":
+            return ap[k]
+    return None
+
+
 def ap_to_row(ap: dict) -> dict:
+    # 원본 api-sz/index.php 와 동일 키
+    zone = _ap_val(ap, "zoneName")
+    domain = _ap_val(ap, "domainName")
+    if zone or domain:
+        zone_domain = f"{zone or 'N/A'} ({domain or 'N/A'})"
+    else:
+        zone_domain = "N/A"
     return {
-        "AP_Name": _na(ap.get("deviceName") or ap.get("apName")),
-        "IP": _na(ap.get("ip") or ap.get("externalIp")),
-        "AP_MAC": _na(ap.get("apMac") or ap.get("mac")),
-        "serial": _na(ap.get("serial")),
-        "Model": _na(ap.get("model")),
-        "channel2G": _na(ap.get("channel24G") or ap.get("channel2G")),
-        "channel5G": _na(ap.get("channel5G")),
-        "channel6G": _na(ap.get("channel6G")),
-        "status": _na(ap.get("status")),
-        "config_status": _na(ap.get("configurationStatus") or ap.get("configState")),
-        "firmwareVer": _na(ap.get("firmwareVersion") or ap.get("firmware")),
-        "airtime2G": _na(ap.get("airtime24G") or ap.get("airtime2G")),
-        "airtime5G": _na(ap.get("airtime5G")),
-        "airtime6G": _na(ap.get("airtime6G")),
-        "noise2G": _na(ap.get("noise24G") or ap.get("noise2G")),
-        "noise5G": _na(ap.get("noise5G")),
-        "noise6G": _na(ap.get("noise6G")),
-        "eirp2G": _na(ap.get("eirp24G") or ap.get("eirp2G")),
-        "eirp5G": _na(ap.get("eirp50G") if ap.get("eirp50G") is not None else ap.get("eirp5G")),
-        "eirp6G": _na(ap.get("eirp6G")),
-        "Clients": _na(ap.get("clientCount") or ap.get("numClients")),
-        "poePort": _na(ap.get("poePortType") or ap.get("poePort")),
-        "ZoneDomain": _na(ap.get("zoneName") or ap.get("domainName")),
+        "AP_Name": _na(_ap_val(ap, "deviceName", "apName")),
+        "IP": _na(_ap_val(ap, "ip", "externalIp")),
+        "AP_MAC": _na(_ap_val(ap, "apMac", "mac")),
+        "serial": _na(_ap_val(ap, "serial")),
+        "Model": _na(_ap_val(ap, "model")),
+        "channel2G": _na(_ap_val(ap, "channel24G", "channel2G")),
+        "channel5G": _na(_ap_val(ap, "channel5G", "channel50G")),
+        "channel6G": _na(_ap_val(ap, "channel6G")),
+        "status": _na(_ap_val(ap, "connectionStatus", "status")),
+        "config_status": _na(_ap_val(ap, "configurationStatus", "configState")),
+        "firmwareVer": _na(_ap_val(ap, "firmwareVersion", "firmware")),
+        "airtime2G": _na(_ap_val(ap, "airtime24G", "airtime2G")),
+        "airtime5G": _na(_ap_val(ap, "airtime5G", "airtime50G")),
+        "airtime6G": _na(_ap_val(ap, "airtime6G")),
+        "noise2G": _na(_ap_val(ap, "noise24G", "noise2G")),
+        "noise5G": _na(_ap_val(ap, "noise5G", "noise50G")),
+        "noise6G": _na(_ap_val(ap, "noise6G")),
+        "eirp2G": _na(_ap_val(ap, "eirp24G", "eirp2G")),
+        "eirp5G": _na(_ap_val(ap, "eirp50G", "eirp5G")),
+        "eirp6G": _na(_ap_val(ap, "eirp6G")),
+        "Clients": _na(_ap_val(ap, "numClients", "clientCount")),
+        "poePort": _na(_ap_val(ap, "poePortStatus", "poePortType", "poePort")),
+        "ZoneDomain": zone_domain,
     }
 
 
