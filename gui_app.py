@@ -1308,9 +1308,21 @@ class App(Tk):
         rrow = Frame(form_right, bg=CARD)
         rrow.pack(anchor="w", pady=2)
         same_btn(rrow, "결과 폴더 열기", lambda: self._open_path(RESULTS_PSK), BTN_BG, fg="#333", relief="solid")
-        same_btn(rrow, "최근 결과 다운로드", lambda: self._download_latest_results(RESULTS_PSK), "#28a745")
-        self._log_action_btns(rrow, LOG_PSK, bg=CARD)
+        same_btn(rrow, "최근 결과 다운로드", lambda: self._download_latest_results(RESULTS_PSK), "#28a745", padx=8)
         Label(rrow, text=RESULT_HINT, font=("Segoe UI", 8), fg="#888", bg=CARD).pack(side=LEFT, padx=(8, 0))
+
+        lrow = Frame(form_right, bg=CARD)
+        lrow.pack(anchor="w", pady=2)
+        Button(
+            lrow, text="로그 폴더", font=("Segoe UI", 10),
+            bg="#e2f22e", fg="#333", relief="solid", borderwidth=1, padx=10, pady=5,
+            command=lambda: self._open_path(LOG_PSK), cursor="hand2",
+        ).pack(side=LEFT)
+        Button(
+            lrow, text="최근 로그", font=("Segoe UI", 10),
+            bg="#ced4da", fg="#333", relief="solid", borderwidth=1, padx=10, pady=5,
+            command=lambda: self._download_latest_log(LOG_PSK), cursor="hand2",
+        ).pack(side=LEFT, padx=(6, 0))
 
         chg = Frame(outer, bg=CARD, padx=12, pady=6,
                     highlightbackground="#dee2e6", highlightthickness=1)
@@ -1866,10 +1878,6 @@ class App(Tk):
                command=self._dpsk_csv).pack(side=RIGHT, padx=4)
         Button(head, text="선택 항목 삭제", bg="#dc3545", fg="white", relief="flat", padx=8,
                command=self._dpsk_delete).pack(side=RIGHT, padx=4)
-        Button(head, text="결과 폴더 열기", bg=BTN_BG, relief="solid", borderwidth=1, padx=8,
-               command=lambda: self._open_path(RESULTS_DPSK)).pack(side=RIGHT, padx=4)
-        Button(head, text="최근 결과 다운로드", bg="#28a745", fg="white", relief="flat", padx=8,
-               command=lambda: self._download_latest_results(RESULTS_DPSK)).pack(side=RIGHT, padx=4)
 
         cols = ("zone", "wlan", "user", "psk", "mac", "role", "vlan", "group", "created", "exp", "status")
         tree_fr = Frame(main, bg=CARD)
@@ -2210,10 +2218,6 @@ class App(Tk):
                relief="flat", padx=16, pady=6, command=self._icx_query, cursor="hand2").pack(side=LEFT, pady=(12, 0))
         Button(form, text="CSV 다운로드", bg="#28a745", fg="white", relief="flat", padx=12, pady=6,
                command=self._icx_csv).pack(side=LEFT, padx=8, pady=(12, 0))
-        Button(form, text="결과 폴더 열기", bg=BTN_BG, relief="solid", borderwidth=1, padx=10, pady=6,
-               command=lambda: self._open_path(RESULTS_SNMP)).pack(side=LEFT, padx=(0, 6), pady=(12, 0))
-        Button(form, text="최근 결과 다운로드", bg="#28a745", fg="white", relief="flat", padx=10, pady=6,
-               command=lambda: self._download_latest_results(RESULTS_SNMP)).pack(side=LEFT, pady=(12, 0))
 
         self.icx_info = StringVar(value="Community / Switch IP 입력 후 조회하세요.")
         Label(outer, textvariable=self.icx_info, font=("Segoe UI", 9), bg=BG, fg="#555").pack(anchor="w", pady=(8, 4))
@@ -2617,10 +2621,6 @@ class App(Tk):
                command=self._udpsk_csv).pack(side=RIGHT, padx=4)
         Button(head, text="선택 항목 삭제", bg="#dc3545", fg="white", relief="flat", padx=8,
                command=self._udpsk_delete).pack(side=RIGHT, padx=4)
-        Button(head, text="결과 폴더 열기", bg=BTN_BG, relief="solid", borderwidth=1, padx=8,
-               command=lambda: self._open_path(RESULTS_UDPSK)).pack(side=RIGHT, padx=4)
-        Button(head, text="최근 결과 다운로드", bg="#28a745", fg="white", relief="flat", padx=8,
-               command=lambda: self._download_latest_results(RESULTS_UDPSK)).pack(side=RIGHT, padx=4)
 
         cols = ("wlan", "dpsk_len", "shared_dpsk", "shared_num", "user", "psk", "vlan",
                 "clients", "usage", "mac", "period", "status", "start_point",
