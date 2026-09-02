@@ -65,9 +65,19 @@ if errorlevel 1 (
   goto END
 )
 
+echo [*] Cleaning build leftovers (keep only dist\%EXENAME%.exe) ...
+if exist build rmdir /s /q build
+if exist "%EXENAME%.spec" del /q "%EXENAME%.spec"
+if exist dist (
+  for /d %%D in (dist\*) do rmdir /s /q "%%D"
+  for %%F in (dist\*) do (
+    if /I not "%%~nxF"=="%EXENAME%.exe" del /q "%%F"
+  )
+)
+
 echo.
 echo [OK] %CD%\dist\%EXENAME%.exe
-echo Copy the exe next to this folder or keep dist\ as the release.
+echo Only the exe remains in dist\.
 
 :END
 echo.
