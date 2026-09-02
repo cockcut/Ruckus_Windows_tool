@@ -113,6 +113,7 @@ def find_remote_exe() -> dict:
                 "name": picked.get("name") or EXE_NAME,
                 "url": picked.get("browser_download_url"),
                 "size": picked.get("size") or 0,
+                "digest": (picked.get("digest") or "").strip(),
             }
     elif r.status_code not in (404,):
         if r.status_code == 403:
@@ -137,6 +138,7 @@ def find_remote_exe() -> dict:
             "name": info.get("name") or EXE_NAME,
             "url": dl,
             "size": info.get("size") or 0,
+            "digest": f"git:{(info.get('sha') or '').strip()}",
         }
     raise RuntimeError(last_err + " Releases에 exe를 올리거나 저장소 루트/dist/release 에 두세요.")
 
@@ -148,12 +150,48 @@ def _norm_ver(s: str) -> str:
     return t.lower()
 
 
-def check_update(root: Path, frozen: bool = False, current_version: str = "") -> dict:
+def file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return "sha256:" + h.hexdigest()
+
+
+def _norm_digest(s: str) -> str:
+    t = (s or "").strip().lower()
+    if t.startswith("sha256:") or t.startswith("git:"):
+        return t
+    if len(t) == 64 and all(c in "0123456789abcdef" for c in t):
+        return "sha256:" + t
+    return t
+
+
+def local_exe_matches_remote(exe_path: str, digest: str) -> bool:
+    """Compare local exe to remote digest without downloading the remote file."""
+    p = Path(exe_path or "")
+    d = (digest or "").strip()
+    if not p.is_file() or not d:
+        return False
+    try:
+        if d.lower().startswith("git:"):
+            return git_blob_sha(p.read_bytes()) == d.split(":", 1)[1].strip()
+        return _norm_digest(file_sha256(p)) == _norm_digest(d)
+    except Exception:
+        return False
+
+
+def check_update(root: Path, frozen: bool = False, current_version: str = "", exe_path: str = "") -> dict:
     try:
         if frozen:
             remote_info = find_remote_exe()
             remote = remote_info["id"]
-            extra = {"exe_url": remote_info["url"], "exe_name": remote_info["name"], "exe_size": remote_info["size"]}
+            extra = {
+                "exe_url": remote_info["url"],
+                "exe_name": remote_info["name"],
+                "exe_size": remote_info["size"],
+                "exe_digest": remote_info.get("digest") or "",
+            }
         else:
             rsrc = _get(f"{API_CONTENTS}/gui_app.py?ref={GITHUB_BRANCH}", timeout=15)
             if rsrc.status_code != 200:
@@ -180,12 +218,20 @@ def check_update(root: Path, frozen: bool = False, current_version: str = "") ->
     local = read_local_sha(root)
     if (not local) and remote:
         if frozen:
-            # rel:tag:assetId  — same app version as this exe → seed SHA, no prompt
-            parts = str(remote).split(":")
-            tag = parts[1] if len(parts) >= 3 and parts[0] == "rel" else ""
-            if current_version and tag and _norm_ver(tag) == _norm_ver(current_version):
+            # first exe run: hash only (no download). fallback tag==version if digest missing
+            digest = extra.get("exe_digest") or ""
+            path = exe_path or ""
+            if digest and path and local_exe_matches_remote(path, digest):
                 write_local_sha(root, remote)
                 local = remote
+            elif digest and path:
+                pass
+            else:
+                parts = str(remote).split(":")
+                tag = parts[1] if len(parts) >= 3 and parts[0] == "rel" else ""
+                if current_version and tag and _norm_ver(tag) == _norm_ver(current_version):
+                    write_local_sha(root, remote)
+                    local = remote
         else:
             blob = extra.get("source_blob") or ""
             if gui_app_blob_matches(root, blob):

@@ -28,7 +28,7 @@ echo 1. pip packages
 echo ------------------------------------------------------------
 if defined PY (
     echo Using: %PY%
-    "%PY%" -m pip uninstall -y paramiko requests urllib3 openpyxl qrcode pillow
+    "%PY%" -m pip uninstall -y paramiko requests urllib3 openpyxl qrcode pillow bcrypt cryptography invoke pynacl charset_normalizer idna certifi et-xmlfile colorama cffi pycparser
     echo [OK] pip uninstall attempted
 ) else (
     echo [SKIP] python.exe not found

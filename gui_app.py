@@ -688,7 +688,12 @@ class App(Tk):
 
     def _check_github_update(self):
         frozen = bool(getattr(sys, "frozen", False))
-        info = gh_updater.check_update(ROOT, frozen=frozen, current_version=APP_VERSION)
+        info = gh_updater.check_update(
+            ROOT,
+            frozen=frozen,
+            current_version=APP_VERSION,
+            exe_path=sys.executable if frozen else "",
+        )
         self._update_info = info
         self.after(0, lambda: self._show_update_ui(info))
 
