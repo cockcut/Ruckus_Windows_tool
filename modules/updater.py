@@ -150,6 +150,10 @@ def _norm_ver(s: str) -> str:
     return t.lower()
 
 
+def file_sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
 def file_sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -158,27 +162,32 @@ def file_sha256(path: Path) -> str:
     return "sha256:" + h.hexdigest()
 
 
-def _norm_digest(s: str) -> str:
-    t = (s or "").strip().lower()
-    if t.startswith("sha256:") or t.startswith("git:"):
-        return t
-    if len(t) == 64 and all(c in "0123456789abcdef" for c in t):
-        return "sha256:" + t
-    return t
-
-
-def local_exe_matches_remote(exe_path: str, digest: str) -> bool:
-    """Compare local exe to remote digest without downloading the remote file."""
-    p = Path(exe_path or "")
-    d = (digest or "").strip()
-    if not p.is_file() or not d:
+def remote_exe_hash_matches(exe_path: Path, remote_info: dict) -> bool:
+    """First-run only: local SHA-256 vs GitHub digest, or download if digest missing."""
+    path = Path(exe_path or "")
+    if not path.is_file():
         return False
     try:
-        if d.lower().startswith("git:"):
-            return git_blob_sha(p.read_bytes()) == d.split(":", 1)[1].strip()
-        return _norm_digest(file_sha256(p)) == _norm_digest(d)
+        local_hex = file_sha256(path).replace("sha256:", "").lower()
     except Exception:
         return False
+    digest = (remote_info.get("digest") or remote_info.get("exe_digest") or "").strip()
+    dlow = digest.lower()
+    if dlow.startswith("git:"):
+        try:
+            return git_blob_sha(path.read_bytes()) == digest.split(":", 1)[1].strip()
+        except Exception:
+            return False
+    hexpart = dlow.replace("sha256:", "").strip()
+    if hexpart and len(hexpart) == 64:
+        return hexpart == local_hex
+    url = remote_info.get("url") or remote_info.get("exe_url") or ""
+    if not url:
+        return False
+    r = _get(url, timeout=180)
+    if r.status_code != 200 or not r.content:
+        return False
+    return file_sha256_hex(r.content) == local_hex
 
 
 def check_update(root: Path, frozen: bool = False, current_version: str = "", exe_path: str = "") -> dict:
@@ -188,9 +197,12 @@ def check_update(root: Path, frozen: bool = False, current_version: str = "", ex
             remote = remote_info["id"]
             extra = {
                 "exe_url": remote_info["url"],
+                "url": remote_info["url"],
                 "exe_name": remote_info["name"],
                 "exe_size": remote_info["size"],
+                "digest": remote_info.get("digest") or "",
                 "exe_digest": remote_info.get("digest") or "",
+                "id": remote_info.get("id") or "",
             }
         else:
             rsrc = _get(f"{API_CONTENTS}/gui_app.py?ref={GITHUB_BRANCH}", timeout=15)
@@ -218,20 +230,10 @@ def check_update(root: Path, frozen: bool = False, current_version: str = "", ex
     local = read_local_sha(root)
     if (not local) and remote:
         if frozen:
-            # first exe run: hash only (no download). fallback tag==version if digest missing
-            digest = extra.get("exe_digest") or ""
-            path = exe_path or ""
-            if digest and path and local_exe_matches_remote(path, digest):
+            exe = Path(exe_path) if exe_path else (Path(root) / EXE_NAME)
+            if remote_exe_hash_matches(exe, remote_info if frozen else extra):
                 write_local_sha(root, remote)
                 local = remote
-            elif digest and path:
-                pass
-            else:
-                parts = str(remote).split(":")
-                tag = parts[1] if len(parts) >= 3 and parts[0] == "rel" else ""
-                if current_version and tag and _norm_ver(tag) == _norm_ver(current_version):
-                    write_local_sha(root, remote)
-                    local = remote
         else:
             blob = extra.get("source_blob") or ""
             if gui_app_blob_matches(root, blob):
@@ -299,8 +301,8 @@ def apply_exe_update(root: Path, exe_path: str, info: dict | None = None) -> dic
     root = Path(root)
     exe_path = Path(exe_path)
     info = info or {}
-    url = info.get("exe_url")
-    remote_id = info.get("remote") or ""
+    url = info.get("exe_url") or info.get("url")
+    remote_id = info.get("remote") or info.get("id") or ""
     if not url:
         found = find_remote_exe()
         url = found["url"]
