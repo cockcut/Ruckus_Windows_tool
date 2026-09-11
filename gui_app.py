@@ -47,6 +47,7 @@ from modules.fw_builder import build_firmware_package, parse_bl7_name
 from modules import updater as gh_updater
 from modules.tftp_server import SimpleTftpServer
 from modules.snmp_icx import query_icx
+from modules.option43 import generate as option43_generate, CONTROLLER_CHOICES as OPTION43_CHOICES
 
 SAMPLES_DIR = ROOT / "samples"
 UPLOAD_DIR = ROOT / "upload"
@@ -202,7 +203,7 @@ def keep_latest_results(folder: Path, keep: int = RESULT_KEEP, suffixes=None):
 #   - 소규모/버그픽스: 0.0.10p1, 0.0.10p2 ...
 #   - 기능 추가·중규모: 0.0.11, 0.0.12 ...
 #   - 대규모 구조 변경: 0.1.0, 0.2.0 ...
-APP_VERSION = "0.0.1"
+APP_VERSION = "0.0.1p1"
 APP_TITLE = f"HSITX Ruckus Technical Tool v{APP_VERSION}"
 BG = "#f4f4f9"
 CARD = "#ffffff"
@@ -648,7 +649,8 @@ class App(Tk):
             ("9", "AP → SZ 펌웨어 업그레이드 + 연동", True),
             ("10", "ICX ARP 조회 (SNMP)", True),
             ("11", "OUI 조회", True),
-            ("12", "단일 AP SSH 테스트", True),
+            ("12", "Ruckus DHCP Option43 HEX 생성기", True),
+            ("13", "단일 AP SSH 테스트", True),
         ]
 
         for num, title, enabled in menus:
@@ -800,6 +802,8 @@ class App(Tk):
         elif num == "11":
             self._build_oui()
         elif num == "12":
+            self._build_option43()
+        elif num == "13":
             self._build_single_test()
         else:
             messagebox.showinfo("안내", "이 기능은 아직 GUI로 구현되지 않았습니다.")
@@ -1367,7 +1371,7 @@ class App(Tk):
         self.psk_summary = StringVar(value="1) Zone 목록 → 2) WLAN 상세 → 3) 위 목록만 변경")
         Label(outer, textvariable=self.psk_summary, font=("Segoe UI", 9), bg=BG, fg="#555").pack(anchor="w", pady=(6, 2))
 
-        cols = ("zoneName", "ssid", "type", "dpsk", "method", "algorithm", "mfp", "passphrase", "saePassphrase", "wlanId")
+        cols = ("zoneName", "ssid", "type", "dpsk", "method", "algorithm", "mfp", "passphrase", "saePassphrase")
         headings = {
             "zoneName": "Zone",
             "ssid": "SSID",
@@ -1378,11 +1382,10 @@ class App(Tk):
             "mfp": "MFP",
             "passphrase": "Passphrase",
             "saePassphrase": "SAE Passphrase",
-            "wlanId": "BSSID(WLAN)",
         }
         widths = {
             "zoneName": 110, "ssid": 110, "type": 100, "dpsk": 50, "method": 102,
-            "algorithm": 72, "mfp": 72, "passphrase": 100, "saePassphrase": 100, "wlanId": 70,
+            "algorithm": 72, "mfp": 72, "passphrase": 100, "saePassphrase": 100,
         }
 
         style = ttk.Style()
@@ -1547,7 +1550,6 @@ class App(Tk):
             r.get("mfp", "-"),
             r.get("passphrase", "-"),
             r.get("saePassphrase", "-"),
-            r.get("wlanId", ""),
         )
 
     def _psk_fill_tree(self, rows):
@@ -1654,11 +1656,21 @@ class App(Tk):
             if not sel:
                 messagebox.showwarning("안내", "개별 변경할 WLAN을 목록에서 선택하세요.")
                 return
-            by_id = {r.get("wlanId"): r for r in self._psk_rows}
             for iid in sel:
                 vals = self.psk_tree.item(iid, "values")
-                wlan_id = vals[8] if len(vals) > 8 else ""
-                r = by_id.get(wlan_id)
+                zone = vals[0] if len(vals) > 0 else ""
+                ssid = vals[1] if len(vals) > 1 else ""
+                typ = vals[2] if len(vals) > 2 else ""
+                r = next(
+                    (
+                        x for x in self._psk_rows
+                        if x.get("changeable")
+                        and (x.get("zoneName") or "") == zone
+                        and (x.get("ssid") or "") == ssid
+                        and (not typ or (x.get("type") or "") == typ)
+                    ),
+                    None,
+                )
                 if not r:
                     continue
                 if not r.get("changeable"):
@@ -1705,7 +1717,6 @@ class App(Tk):
                         "ssid": t.get("ssid"),
                         "type": t.get("type"),
                         "method": method,
-                        "wlanId": t.get("wlanId"),
                         "status": "OK" if good else "FAIL",
                         "message": detail,
                     })
@@ -1716,7 +1727,7 @@ class App(Tk):
                 RESULTS_PSK.mkdir(exist_ok=True)
                 save_csv(
                     out,
-                    ["zone", "ssid", "type", "method", "wlanId", "status", "message"],
+                    ["zone", "ssid", "type", "method", "status", "message"],
                     results,
                 )
                 keep_latest_results(RESULTS_PSK)
@@ -4178,7 +4189,109 @@ class App(Tk):
             messagebox.showinfo("경로", str(idx.resolve()) + f"\n{e}")
 
     # ------------------------------------------------------------------
-    # 메뉴 12: 단일 AP 테스트
+    # 메뉴 12: DHCP Option 43 HEX
+    # ------------------------------------------------------------------
+    def _build_option43(self):
+        self._clear_page()
+        outer = self._scroll_page(padx=20, pady=16)
+        self._back_btn(outer)
+        Label(
+            outer, text="12. Ruckus DHCP Option43 HEX 생성기",
+            font=("Segoe UI", 14, "bold"), fg=ACCENT, bg=BG,
+        ).pack(anchor="w")
+        Label(
+            outer,
+            text="컨트롤러 종류와 IP(최대 4개, 공백 구분)로 DHCP Option 43 hex 를 만듭니다.",
+            font=("Segoe UI", 9), fg="#666", bg=BG,
+        ).pack(anchor="w", pady=(2, 10))
+
+        form = Frame(outer, bg=CARD, padx=14, pady=12,
+                     highlightbackground="#dee2e6", highlightthickness=1)
+        form.pack(fill=X)
+
+        Label(form, text="Wireless Controller Type", bg=CARD,
+              font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        self.o43_type = StringVar(value=OPTION43_CHOICES[0][0])
+        cmb = ttk.Combobox(
+            form, textvariable=self.o43_type, state="readonly",
+            values=[c[0] for c in OPTION43_CHOICES], font=("Segoe UI", 10), width=48,
+        )
+        cmb.pack(anchor="w", pady=(2, 10))
+
+        Label(form, text="Controller IP (최대 4개, IP간 구분은 빈칸)", bg=CARD,
+              font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        self.o43_ips = StringVar()
+        Entry(form, textvariable=self.o43_ips, font=("Segoe UI", 10), width=60).pack(
+            anchor="w", pady=(2, 8), fill=X
+        )
+
+        btn_row = Frame(form, bg=CARD)
+        btn_row.pack(fill=X, pady=(4, 0))
+        Button(
+            btn_row, text="HEX 생성", font=("Segoe UI", 10, "bold"),
+            bg=LINK, fg="white", relief="flat", padx=16, pady=5,
+            command=self._option43_refresh, cursor="hand2",
+        ).pack(side=LEFT)
+        Button(
+            btn_row, text="CLI 복사", font=("Segoe UI", 10),
+            bg=BTN_BG, relief="solid", borderwidth=1, padx=12, pady=5,
+            command=self._option43_copy, cursor="hand2",
+        ).pack(side=LEFT, padx=(8, 0))
+
+        Label(outer, text="결과", font=("Segoe UI", 10, "bold"), bg=BG).pack(anchor="w", pady=(12, 4))
+        box = Frame(outer, bg="#e9ecef", highlightbackground="#007bff", highlightthickness=3)
+        box.pack(fill=BOTH, expand=True)
+        self.o43_out = Text(box, height=14, font=("Consolas", 10), bg="#e9ecef",
+                            relief="flat", wrap=WORD)
+        sb = Scrollbar(box, command=self.o43_out.yview)
+        self.o43_out.configure(yscrollcommand=sb.set)
+        self.o43_out.pack(side=LEFT, fill=BOTH, expand=True, padx=10, pady=10)
+        sb.pack(side=RIGHT, fill=Y)
+        self.o43_out.insert("1.0", "결과가 여기에 표시됩니다.")
+        self.o43_out.config(state=DISABLED)
+        self._o43_cli = ""
+
+        self.o43_type.trace_add("write", lambda *_: self._option43_refresh())
+        self.o43_ips.trace_add("write", lambda *_: self._option43_refresh())
+
+    def _option43_code(self) -> str:
+        label = (self.o43_type.get() if hasattr(self, "o43_type") else "") or ""
+        for name, code in OPTION43_CHOICES:
+            if name == label:
+                return code
+        return "06"
+
+    def _option43_refresh(self):
+        if not hasattr(self, "o43_out"):
+            return
+        info = option43_generate(self._option43_code(), self.o43_ips.get() if hasattr(self, "o43_ips") else "")
+        self._o43_cli = info.get("cli") or ""
+        self.o43_out.config(state=NORMAL)
+        self.o43_out.delete("1.0", END)
+        text = info.get("text") or info.get("error") or ""
+        self.o43_out.insert("1.0", text)
+        self.o43_out.tag_delete("cli")
+        if info.get("ok") and self._o43_cli:
+            start = text.find(self._o43_cli)
+            if start >= 0:
+                self.o43_out.tag_add("cli", f"1.0+{start}c", f"1.0+{start + len(self._o43_cli)}c")
+                self.o43_out.tag_config("cli", foreground="#d63384", font=("Consolas", 15, "bold"))
+        self.o43_out.config(state=DISABLED)
+
+    def _option43_copy(self):
+        cli = getattr(self, "_o43_cli", "") or ""
+        if not cli:
+            messagebox.showwarning("안내", "먼저 IP를 입력해 HEX를 생성하세요.")
+            return
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(cli)
+            messagebox.showinfo("복사", f"클립보드:\n{cli}")
+        except Exception as e:
+            messagebox.showerror("복사 실패", str(e))
+
+    # ------------------------------------------------------------------
+    # 메뉴 13: 단일 AP 테스트
     # ------------------------------------------------------------------
     def _build_single_test(self):
         self._clear_page()
@@ -4187,7 +4300,7 @@ class App(Tk):
         self._back_btn(outer)
 
         Label(
-            outer, text="12. 단일 AP SSH 테스트",
+            outer, text="13. 단일 AP SSH 테스트",
             font=("Segoe UI", 14, "bold"), fg=ACCENT, bg=BG,
         ).pack(anchor="w")
         Label(
