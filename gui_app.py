@@ -48,6 +48,7 @@ from modules import updater as gh_updater
 from modules.tftp_server import SimpleTftpServer
 from modules.snmp_icx import query_icx
 from modules.option43 import generate as option43_generate, CONTROLLER_CHOICES as OPTION43_CHOICES
+from modules import ntp_server as ntp_mod
 
 SAMPLES_DIR = ROOT / "samples"
 UPLOAD_DIR = ROOT / "upload"
@@ -75,7 +76,7 @@ LOG_DPSK = LOG_DIR / "dpsk"
 LOG_UDPSK = LOG_DIR / "dpsk_ul"
 LOG_SNMP = LOG_DIR / "snmp"
 LOG_FWCLI = LOG_DIR / "8_fw_cli"
-LOG_SINGLE = LOG_DIR / "12_single"
+LOG_SINGLE = LOG_DIR / "99_single"
 SAMPLES_DIR.mkdir(exist_ok=True)
 UPLOAD_DIR.mkdir(exist_ok=True)
 for _d in (
@@ -203,7 +204,7 @@ def keep_latest_results(folder: Path, keep: int = RESULT_KEEP, suffixes=None):
 #   - 소규모/버그픽스: 0.0.10p1, 0.0.10p2 ...
 #   - 기능 추가·중규모: 0.0.11, 0.0.12 ...
 #   - 대규모 구조 변경: 0.1.0, 0.2.0 ...
-APP_VERSION = "0.0.1p1"
+APP_VERSION = "0.0.2"
 APP_TITLE = f"HSITX Ruckus Technical Tool v{APP_VERSION}"
 BG = "#f4f4f9"
 CARD = "#ffffff"
@@ -650,7 +651,8 @@ class App(Tk):
             ("10", "ICX ARP 조회 (SNMP)", True),
             ("11", "OUI 조회", True),
             ("12", "Ruckus DHCP Option43 HEX 생성기", True),
-            ("13", "단일 AP SSH 테스트", True),
+            ("13", "임시 NTP 서버 On/Off", True),
+            ("99", "단일 AP SSH 테스트", True),
         ]
 
         for num, title, enabled in menus:
@@ -804,6 +806,8 @@ class App(Tk):
         elif num == "12":
             self._build_option43()
         elif num == "13":
+            self._build_ntp()
+        elif num == "99":
             self._build_single_test()
         else:
             messagebox.showinfo("안내", "이 기능은 아직 GUI로 구현되지 않았습니다.")
@@ -4291,7 +4295,155 @@ class App(Tk):
             messagebox.showerror("복사 실패", str(e))
 
     # ------------------------------------------------------------------
-    # 메뉴 13: 단일 AP 테스트
+    # 메뉴 13: 임시 NTP 서버
+    # ------------------------------------------------------------------
+    def _build_ntp(self):
+        self._clear_page()
+        outer = self._scroll_page(padx=20, pady=16)
+        self._back_btn(outer)
+        title_row = Frame(outer, bg=BG)
+        title_row.pack(anchor="w")
+        Label(
+            title_row, text="13. 임시 NTP 서버 On/Off",
+            font=("Segoe UI", 14, "bold"), fg=ACCENT, bg=BG,
+        ).pack(side=LEFT)
+        Label(
+            title_row, text=" (SZ 초기설정시 offline 작업일때 주로 사용)",
+            font=("Segoe UI", 13), fg=LINK, bg=BG,
+        ).pack(side=LEFT)
+        Label(
+            outer,
+            text="이 PC를 임시 NTP 서버로 켭니다. 다른 장비는 아래 IPv4 를 NTP 서버로 지정하세요. 창을 닫아도 ON 은 유지됩니다.",
+            font=("Segoe UI", 9), fg="#666", bg=BG,
+        ).pack(anchor="w", pady=(2, 6))
+
+        admin = ntp_mod.is_admin()
+        Label(
+            outer,
+            text="관리자 권한: 예" if admin else "관리자 권한: 아니오  — ON/OFF 시 Windows 보안(UAC) 확인이 뜹니다.",
+            font=("Segoe UI", 9, "bold"),
+            fg="#198754" if admin else ACCENT, bg=BG,
+        ).pack(anchor="w")
+
+        self.ntp_title = StringVar(value="현재 상태 : 확인 중...")
+        self.ntp_svc = StringVar(value="w32time : -")
+        self.ntp_reg = StringVar(value="NtpServer Enabled : -")
+        self.ntp_fw = StringVar(value="방화벽 UDP 123 : -")
+        self.ntp_ip = StringVar(value="이 PC IPv4 : -")
+
+        card = Frame(outer, bg=CARD, padx=14, pady=10,
+                     highlightbackground="#dee2e6", highlightthickness=1)
+        card.pack(fill=X, pady=(10, 4))
+        self.ntp_title_lbl = Label(
+            card, textvariable=self.ntp_title, font=("Segoe UI", 13, "bold"),
+            bg=CARD, fg="#6c757d",
+        )
+        self.ntp_title_lbl.pack(anchor="w")
+        Label(card, textvariable=self.ntp_svc, font=("Segoe UI", 9), bg=CARD).pack(anchor="w", pady=(6, 0))
+        Label(card, textvariable=self.ntp_reg, font=("Segoe UI", 9), bg=CARD).pack(anchor="w")
+        Label(card, textvariable=self.ntp_fw, font=("Segoe UI", 9), bg=CARD).pack(anchor="w")
+        Label(card, textvariable=self.ntp_ip, font=("Segoe UI", 9), bg=CARD, wraplength=900, justify="left").pack(anchor="w")
+
+        btn = Frame(outer, bg=BG)
+        btn.pack(fill=X, pady=12)
+        self.ntp_on_btn = Button(
+            btn, text="NTP ON", font=("Segoe UI", 11, "bold"),
+            bg="#198754", fg="white", relief="flat", padx=22, pady=8,
+            command=lambda: self._ntp_run("on"), cursor="hand2",
+        )
+        self.ntp_on_btn.pack(side=LEFT)
+        self.ntp_off_btn = Button(
+            btn, text="NTP OFF", font=("Segoe UI", 11, "bold"),
+            bg="#6c757d", fg="white", relief="flat", padx=22, pady=8,
+            command=lambda: self._ntp_run("off"), cursor="hand2",
+        )
+        self.ntp_off_btn.pack(side=LEFT, padx=(10, 0))
+        self.ntp_ref_btn = Button(
+            btn, text="상태 새로고침", font=("Segoe UI", 11),
+            bg=BTN_BG, relief="solid", borderwidth=1, padx=16, pady=8,
+            command=self._ntp_refresh, cursor="hand2",
+        )
+        self.ntp_ref_btn.pack(side=LEFT, padx=(10, 0))
+
+        Label(outer, text="실행 로그", font=("Segoe UI", 10, "bold"), bg=BG).pack(anchor="w")
+        box = Frame(outer, bg="#1e1e1e")
+        box.pack(fill=BOTH, expand=True, pady=(4, 0))
+        self.ntp_log = Text(box, height=12, font=("Consolas", 10), bg="#1e1e1e",
+                            fg="#dcdcdc", relief="flat", wrap=WORD)
+        sb = Scrollbar(box, command=self.ntp_log.yview)
+        self.ntp_log.configure(yscrollcommand=sb.set)
+        self.ntp_log.pack(side=LEFT, fill=BOTH, expand=True)
+        sb.pack(side=RIGHT, fill=Y)
+        self.after(150, self._ntp_refresh)
+
+    def _ntp_apply(self, d):
+        if not hasattr(self, "ntp_title"):
+            return
+        on = bool(d.get("ON"))
+        self.ntp_title.set("현재 상태 : NTP 서버 ON" if on else "현재 상태 : NTP 서버 OFF")
+        self.ntp_title_lbl.config(fg="#198754" if on else "#6c757d")
+        self.ntp_svc.set(f"w32time : {d.get('SVC','-')} / start={d.get('START','-')}")
+        self.ntp_reg.set(f"NtpServer Enabled : {d.get('ENABLED','-')}")
+        self.ntp_fw.set("방화벽 UDP 123 : 허용" if d.get("FW") == "1" else "방화벽 UDP 123 : 없음")
+        self.ntp_ip.set(f"이 PC IPv4 : {d.get('IPS') or '-'}")
+        if d.get("error"):
+            self._ntp_log(d["error"] + "\n")
+
+    def _ntp_log(self, text):
+        if hasattr(self, "ntp_log"):
+            self.ntp_log.insert(END, text)
+            self.ntp_log.see(END)
+
+    def _ntp_busy(self, busy):
+        st = DISABLED if busy else NORMAL
+        for name in ("ntp_on_btn", "ntp_off_btn", "ntp_ref_btn"):
+            w = getattr(self, name, None)
+            if w:
+                w.config(state=st)
+
+    def _ntp_refresh(self):
+        if self._worker and self._worker.is_alive():
+            return
+        self._ntp_busy(True)
+
+        def work():
+            try:
+                d = ntp_mod.query_state()
+                self.after(0, lambda: self._ntp_apply(d))
+            except Exception as e:
+                self.after(0, lambda: self._ntp_log(f"상태 조회 실패: {e}\n"))
+            finally:
+                self.after(0, lambda: self._ntp_busy(False))
+
+        self._worker = threading.Thread(target=work, daemon=True)
+        self._worker.start()
+
+    def _ntp_run(self, action):
+        if self._worker and self._worker.is_alive():
+            return
+        self._ntp_busy(True)
+        self._ntp_log(f"\n===== NTP {action.upper()} =====\n")
+        if not ntp_mod.is_admin():
+            self._ntp_log("관리자 권한이 아니라 Windows 보안(UAC) 확인이 표시됩니다.\n")
+
+        def work():
+            try:
+                fn = ntp_mod.turn_on if action == "on" else ntp_mod.turn_off
+                ok, text = fn()
+                self.after(0, lambda: self._ntp_log((text or "") + "\n"))
+                self.after(0, lambda: self._ntp_log("[OK]\n" if ok else "[FAIL]\n"))
+                d = ntp_mod.query_state()
+                self.after(0, lambda: self._ntp_apply(d))
+            except Exception as e:
+                self.after(0, lambda: self._ntp_log(f"예외: {e}\n"))
+            finally:
+                self.after(0, lambda: self._ntp_busy(False))
+
+        self._worker = threading.Thread(target=work, daemon=True)
+        self._worker.start()
+
+    # ------------------------------------------------------------------
+    # 메뉴 99: 단일 AP 테스트
     # ------------------------------------------------------------------
     def _build_single_test(self):
         self._clear_page()
@@ -4300,7 +4452,7 @@ class App(Tk):
         self._back_btn(outer)
 
         Label(
-            outer, text="13. 단일 AP SSH 테스트",
+            outer, text="99. 단일 AP SSH 테스트",
             font=("Segoe UI", 14, "bold"), fg=ACCENT, bg=BG,
         ).pack(anchor="w")
         Label(

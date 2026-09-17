@@ -323,7 +323,9 @@ MENU = """
   9. AP → SZ 펌웨어 업그레이드 + 연동       (SSH – 추후)
  10. ICX ARP 조회 (SNMP)                    (추후)
  11. OUI 조회 (매일 업데이트)
- 12. 단일 AP SSH 테스트 (디버그용)          ★
+ 12. Ruckus DHCP Option43 HEX 생성기
+ 13. 임시 NTP 서버 On/Off
+ 99. 단일 AP SSH 테스트 (디버그용)          ★
   0. 종료
 """
 
@@ -342,8 +344,11 @@ def main():
             menu_ap_batch()
         elif choice == "11":
             menu_oui()
-        elif choice == "12":
+        elif choice == "99":
             menu_single_test()
+        elif choice == "13":
+            print("임시 NTP 서버는 GUI 메뉴 13을 사용하세요.")
+            pause()
         elif choice in ("1", "2", "3", "4", "5", "7", "8", "9", "10"):
             titles = {
                 "1": "1. SmartZone 정보 보기",
