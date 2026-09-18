@@ -65,19 +65,27 @@ if errorlevel 1 (
   goto END
 )
 
-echo [*] Cleaning build leftovers (keep only dist\%EXENAME%.exe) ...
+echo [*] Cleaning build leftovers (keep exe + sha256) ...
 if exist build rmdir /s /q build
 if exist "%EXENAME%.spec" del /q "%EXENAME%.spec"
 if exist dist (
   for /d %%D in (dist\*) do rmdir /s /q "%%D"
   for %%F in (dist\*) do (
-    if /I not "%%~nxF"=="%EXENAME%.exe" del /q "%%F"
+    if /I not "%%~nxF"=="%EXENAME%.exe" if /I not "%%~nxF"=="%EXENAME%.exe.sha256" del /q "%%F"
   )
+)
+
+echo [*] Writing SHA256 info file ...
+"%PY%" -c "import hashlib,pathlib; p=pathlib.Path(r'dist/%EXENAME%.exe'); h=hashlib.sha256(p.read_bytes()).hexdigest(); out=pathlib.Path(r'dist/%EXENAME%.exe.sha256'); out.write_text(h+'  '+p.name+chr(10), encoding='ascii'); print(h+'  '+p.name)"
+if errorlevel 1 (
+  echo [ERROR] SHA256 file create failed.
+  goto END
 )
 
 echo.
 echo [OK] %CD%\dist\%EXENAME%.exe
-echo Only the exe remains in dist\.
+echo [OK] %CD%\dist\%EXENAME%.exe.sha256
+echo Upload BOTH files to GitHub Release.
 
 :END
 echo.
