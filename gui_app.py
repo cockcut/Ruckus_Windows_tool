@@ -15,7 +15,7 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 from tkinter import (
-    Tk, Frame, Label, Button, Entry, Text, Scrollbar, Canvas, StringVar, BooleanVar,
+    Tk, Frame, Label, Button, Entry, Text, Scrollbar, Canvas, StringVar, BooleanVar, PhotoImage,
     Toplevel, Checkbutton, LabelFrame, filedialog, messagebox, ttk, END, BOTH, X, Y, LEFT, RIGHT,
     TOP, BOTTOM, DISABLED, NORMAL, WORD, HORIZONTAL, VERTICAL,
 )
@@ -27,6 +27,35 @@ if getattr(sys, "frozen", False):
 else:
     ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
+
+def _apply_window_icon(win):
+    bases = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        bases.append(Path(meipass))
+    bases.append(ROOT)
+    ico = png = None
+    for b in bases:
+        i = b / "assets" / "app_icon.ico"
+        p = b / "assets" / "app_icon.png"
+        if ico is None and i.is_file():
+            ico = i
+        if png is None and p.is_file():
+            png = p
+    try:
+        if ico is not None:
+            win.iconbitmap(default=str(ico))
+    except Exception:
+        pass
+    try:
+        if png is not None:
+            img = PhotoImage(file=str(png))
+            win.iconphoto(True, img)
+            win._hsitx_icon = img
+    except Exception:
+        pass
+
+
 from modules.ssh_helper import (
     process_ap,
     RuckusSSH,
@@ -400,6 +429,7 @@ class App(Tk):
         self.geometry("1180x760")
         self.minsize(860, 640)
         self.configure(bg=BG)
+        _apply_window_icon(self)
         self._log_queue = queue.Queue()
         self._worker = None
         self._stop_flag = False

@@ -54,6 +54,8 @@ if exist "%EXENAME%.spec" del /q "%EXENAME%.spec"
 echo [*] Building ...
 "%PY%" -m PyInstaller --noconfirm --clean --windowed --onefile ^
   --name "%EXENAME%" ^
+  --icon "assets\app_icon.ico" ^
+  --add-data "assets;assets" ^
   --add-data "modules;modules" ^
   --add-data "samples;samples" ^
   --hidden-import requests --hidden-import urllib3 --hidden-import tkinter ^
