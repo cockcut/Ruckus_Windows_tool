@@ -1,4 +1,5 @@
 # HSITX Ruckus Technical Tool (Windows Native)
+# crossbreeder의 기능을 기반으로 했습니다.
 
 PHP / Linux / Expect 없이 **Windows에서 프로그램처럼** 사용하는 Ruckus AP 관리 도구입니다.
 
