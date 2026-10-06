@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import (
     Tk, Frame, Label, Button, Entry, Text, Scrollbar, Canvas, StringVar, BooleanVar, PhotoImage,
-    Toplevel, Checkbutton, LabelFrame, filedialog, messagebox, ttk, END, BOTH, X, Y, LEFT, RIGHT,
+    Toplevel, Checkbutton, LabelFrame, Menu, filedialog, messagebox, ttk, END, BOTH, X, Y, LEFT, RIGHT,
     TOP, BOTTOM, DISABLED, NORMAL, WORD, HORIZONTAL, VERTICAL,
 )
 
@@ -2269,13 +2269,13 @@ class App(Tk):
         Button(form, text="CSV 다운로드", bg="#28a745", fg="white", relief="flat", padx=12, pady=6,
                command=self._icx_csv).pack(side=LEFT, padx=8, pady=(12, 0))
 
-        self.icx_info = StringVar(value="Community / Switch IP 입력 후 조회하세요.")
+        self.icx_info = StringVar(value="Community / Switch IP 입력 후 조회하세요. IP·MAC 칸은 오른쪽 클릭으로 복사.")
         Label(outer, textvariable=self.icx_info, font=("Segoe UI", 9), bg=BG, fg="#555").pack(anchor="w", pady=(8, 4))
 
         cols = ("ip", "mac", "mac_lower", "iface")
         tree_fr = Frame(outer, bg=CARD)
         tree_fr.pack(fill=BOTH, expand=True)
-        self.icx_tree = ttk.Treeview(tree_fr, columns=cols, show="headings", height=18)
+        self.icx_tree = ttk.Treeview(tree_fr, columns=cols, show="headings", height=18, selectmode="extended")
         headers = {"ip": "IP", "mac": "MAC", "mac_lower": "MAC (lowercase)", "iface": "VLAN / Interface"}
         widths = {"ip": 140, "mac": 150, "mac_lower": 150, "iface": 280}
         for c in cols:
@@ -2289,6 +2289,10 @@ class App(Tk):
         xsb.grid(row=1, column=0, sticky="ew")
         tree_fr.grid_rowconfigure(0, weight=1)
         tree_fr.grid_columnconfigure(0, weight=1)
+        self._icx_copy_text = ""
+        self.icx_menu = Menu(self, tearoff=0)
+        self.icx_menu.add_command(label="복사", command=self._icx_copy_saved)
+        self.icx_tree.bind("<Button-3>", self._icx_popup)
 
     def _icx_query(self):
         host = self.icx_ip.get().strip()
@@ -2320,6 +2324,37 @@ class App(Tk):
         self.icx_info.set(
             f"Hostname: {res.get('hostname')}   Model: {res.get('model')}   Version: {res.get('version')}   ARP {len(rows)}건"
         )
+
+    def _icx_copy_saved(self):
+        text = getattr(self, "_icx_copy_text", "") or ""
+        if not text:
+            return
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.update_idletasks()
+        if hasattr(self, "icx_info"):
+            self.icx_info.set(f"복사: {text}")
+
+    def _icx_popup(self, event):
+        tree = self.icx_tree
+        row = tree.identify_row(event.y)
+        col = tree.identify_column(event.x)
+        if not row or not col:
+            return
+        idx = int(col.replace("#", "")) - 1
+        if idx not in (0, 1, 2):
+            return
+        vals = tree.item(row, "values")
+        if idx < 0 or idx >= len(vals) or not str(vals[idx]).strip():
+            return
+        tree.selection_set(row)
+        self._icx_copy_text = str(vals[idx])
+        label = "IP 복사" if idx == 0 else "MAC 복사"
+        self.icx_menu.entryconfig(0, label=label)
+        try:
+            self.icx_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.icx_menu.grab_release()
 
     def _icx_csv(self):
         rows = getattr(self, "_icx_rows", [])
