@@ -106,13 +106,15 @@ LOG_UDPSK = LOG_DIR / "dpsk_ul"
 LOG_SNMP = LOG_DIR / "snmp"
 LOG_FWCLI = LOG_DIR / "8_fw_cli"
 LOG_SINGLE = LOG_DIR / "99_single"
+RESULTS_CMD = RESULTS_DIR / "98_ap_cmd"
+LOG_CMD = LOG_DIR / "98_ap_cmd"
 SAMPLES_DIR.mkdir(exist_ok=True)
 UPLOAD_DIR.mkdir(exist_ok=True)
 for _d in (
     RESULTS_DIR, RESULTS_AP_BATCH, RESULTS_SZ, RESULTS_UNLEASHED, RESULTS_OUI,
     RESULTS_PSK, RESULTS_FW, RESULTS_SZFW, RESULTS_DPSK, RESULTS_UDPSK, RESULTS_SNMP, FW_DIR,
     LOG_DIR, LOG_AP_BATCH, LOG_SZ, LOG_UNLEASHED, LOG_OUI, LOG_PSK, LOG_FW, LOG_SZFW,
-    LOG_DPSK, LOG_UDPSK, LOG_SNMP, LOG_FWCLI, LOG_SINGLE,
+    LOG_DPSK, LOG_UDPSK, LOG_SNMP, LOG_FWCLI, LOG_SINGLE, RESULTS_CMD, LOG_CMD,
 ):
     _d.mkdir(exist_ok=True)
 
@@ -682,6 +684,7 @@ class App(Tk):
             ("11", "OUI 조회", True),
             ("12", "Ruckus DHCP Option43 HEX 생성기", True),
             ("13", "임시 NTP 서버 On/Off", True),
+            ("98", "다수 AP 명령 실행", True),
             ("99", "단일 AP SSH 테스트", True),
         ]
 
@@ -837,6 +840,8 @@ class App(Tk):
             self._build_option43()
         elif num == "13":
             self._build_ntp()
+        elif num == "98":
+            self._build_cmd_batch()
         elif num == "99":
             self._build_single_test()
         else:
@@ -1120,7 +1125,7 @@ class App(Tk):
 
     def _sync_alt_pw_tips(self):
         on = self._alt_pw_complex_on()
-        for name in ("ap_pass2_tip", "fwup_pass2_tip", "fwsz_pass2_tip"):
+        for name in ("ap_pass2_tip", "fwup_pass2_tip", "fwsz_pass2_tip", "cmd_pass2_tip"):
             tip = getattr(self, name, None)
             if tip:
                 tip.set_enabled(on)
@@ -4503,6 +4508,195 @@ class App(Tk):
                 self.after(0, lambda: self._ntp_log(f"예외: {e}\n"))
             finally:
                 self.after(0, lambda: self._ntp_busy(False))
+
+        self._worker = threading.Thread(target=work, daemon=True)
+        self._worker.start()
+
+    # ------------------------------------------------------------------
+    # 메뉴 98: 다수 AP 명령 실행 (6번 업로드 + 99번 명령 전송)
+    # ------------------------------------------------------------------
+    def _build_cmd_batch(self):
+        self._clear_page()
+        outer = self._scroll_page(padx=20, pady=16)
+        self._back_btn(outer)
+        Label(
+            outer, text="98. 다수 AP 명령 실행",
+            font=("Segoe UI", 14, "bold"), fg=ACCENT, bg=BG,
+        ).pack(anchor="w")
+        Label(
+            outer,
+            text="CSV의 AP에 같은 명령을 순서대로 전송합니다. 한 줄에 명령 하나.",
+            font=("Segoe UI", 9), fg="#666", bg=BG,
+        ).pack(anchor="w", pady=(2, 8))
+
+        file_fr = Frame(outer, bg=CARD, padx=12, pady=10, highlightbackground="#dee2e6", highlightthickness=1)
+        file_fr.pack(fill=X, pady=(0, 8))
+        head = Frame(file_fr, bg=CARD)
+        head.pack(fill=X)
+        left_csv = Frame(head, bg=CARD)
+        left_csv.pack(side=LEFT, anchor="n")
+        Label(left_csv, text="1) CSV 파일", font=("Segoe UI", 10, "bold"), bg=CARD).pack(anchor="w")
+        acc2 = LabelFrame(
+            head, text="2차 기본 계정 (초기 비번 변경시 or CSV 실패시)", bg=CARD, fg="#444",
+            font=("Segoe UI", 8), padx=10, pady=6,
+        )
+        acc2.pack(side=RIGHT, anchor="n")
+        self.cmd_user2 = StringVar(value="")
+        self.cmd_pass2 = StringVar(value="")
+        Label(acc2, text="Username", width=10, anchor="w", bg=CARD, font=("Segoe UI", 10)).grid(row=0, column=0, sticky="w", pady=2)
+        Entry(acc2, textvariable=self.cmd_user2, width=16, font=("Segoe UI", 10)).grid(row=0, column=1, sticky="w", pady=2)
+        Label(acc2, text="Password", width=10, anchor="w", bg=CARD, font=("Segoe UI", 10)).grid(row=1, column=0, sticky="w", pady=2)
+        self.cmd_pass2_entry = Entry(acc2, textvariable=self.cmd_pass2, width=16, font=("Segoe UI", 10), show="*")
+        self.cmd_pass2_entry.grid(row=1, column=1, sticky="w", pady=2)
+        self.cmd_pass2_tip = BalloonTip(self.cmd_pass2_entry, PW_RULE_KO, enabled=self._alt_pw_complex_on())
+        self.cmd_pass2_show = BooleanVar(value=False)
+        Checkbutton(
+            acc2, text="표시", variable=self.cmd_pass2_show, bg=CARD,
+            command=lambda: self.cmd_pass2_entry.config(show="" if self.cmd_pass2_show.get() else "*"),
+        ).grid(row=1, column=2, sticky="w", padx=(6, 0))
+        self._alt_pw_hint_row(acc2)
+
+        row1 = Frame(left_csv, bg=CARD)
+        row1.pack(fill=X, pady=6)
+        Button(
+            row1, text="샘플 다운로드 (CSV)", font=("Segoe UI", 10),
+            bg="#28a745", fg="white", relief="flat", padx=12, pady=4,
+            command=self._download_sample, cursor="hand2",
+        ).pack(side=LEFT, padx=(0, 8))
+        Button(
+            row1, text="파일 업로드 (CSV)", font=("Segoe UI", 10),
+            bg=LINK, fg="white", relief="flat", padx=12, pady=4,
+            command=self._browse_csv, cursor="hand2",
+        ).pack(side=LEFT)
+        self.csv_path_var = StringVar(value="")
+        self.csv_info_var = StringVar(value="")
+        Label(file_fr, textvariable=self.csv_path_var, font=("Segoe UI", 9), fg="#333", bg=CARD, wraplength=900, justify="left").pack(anchor="w", pady=(4, 0))
+        Label(file_fr, textvariable=self.csv_info_var, font=("Segoe UI", 9), fg="#666", bg=CARD).pack(anchor="w")
+
+        cols = ("ip", "user", "pass", "new_ip", "subnet", "gw", "sz", "hostname")
+        tree_fr = Frame(file_fr, bg=CARD)
+        tree_fr.pack(fill=X, pady=(6, 0))
+        self.csv_tree = ttk.Treeview(tree_fr, columns=cols, show="headings", height=4)
+        for c, w, h in (
+            ("ip", 120, "IP"), ("user", 80, "User"), ("pass", 90, "Password"),
+            ("new_ip", 110, "New IP"), ("subnet", 110, "Subnet"), ("gw", 110, "GW"),
+            ("sz", 110, "SZ"), ("hostname", 120, "Hostname"),
+        ):
+            self.csv_tree.heading(c, text=h)
+            self.csv_tree.column(c, width=w, anchor="w")
+        self.csv_tree.pack(side=LEFT, fill=X, expand=True)
+        if getattr(self, "_csv_rows", None):
+            self._fill_csv_preview(self._csv_rows)
+            self.csv_info_var.set(f"업로드됨: {len(self._csv_rows)} 대")
+
+        cmd_fr = Frame(outer, bg=CARD, padx=12, pady=10, highlightbackground="#dee2e6", highlightthickness=1)
+        cmd_fr.pack(fill=X, pady=(0, 8))
+        Label(cmd_fr, text="2) 전송 명령 (99번과 동일, 한 줄에 하나)", font=("Segoe UI", 10, "bold"), bg=CARD).pack(anchor="w")
+        self.cmd_batch_text = Text(cmd_fr, height=6, font=("Consolas", 10), wrap="none")
+        self.cmd_batch_text.pack(fill=X, pady=(6, 0))
+        self.cmd_batch_text.insert("1.0", "get version\nget device-name\n")
+
+        run_fr = Frame(outer, bg=BG)
+        run_fr.pack(fill=X, pady=(0, 6))
+        self.cmd_run_btn = Button(
+            run_fr, text="명령 전송", font=("Segoe UI", 10, "bold"),
+            bg=ACCENT, fg="white", relief="flat", padx=14, pady=4,
+            command=self._start_cmd_batch, cursor="hand2",
+        )
+        self.cmd_run_btn.pack(side=LEFT, padx=(0, 6))
+        self.cmd_stop_btn = Button(
+            run_fr, text="중지", font=("Segoe UI", 10),
+            bg=BTN_BG, relief="solid", borderwidth=1, padx=12, pady=4,
+            command=self._stop_batch, cursor="hand2", state=DISABLED,
+        )
+        self.cmd_stop_btn.pack(side=LEFT, padx=(0, 6))
+        Button(
+            run_fr, text="결과 폴더", font=("Segoe UI", 10),
+            bg=BTN_BG, relief="solid", borderwidth=1, padx=10, pady=5,
+            command=lambda: self._open_path(RESULTS_CMD), cursor="hand2",
+        ).pack(side=LEFT)
+        self._latest_result_btn(run_fr, RESULTS_CMD)
+        self._log_action_btns(run_fr, LOG_CMD, bg=BG)
+        self.cmd_status = StringVar(value="")
+        Label(run_fr, textvariable=self.cmd_status, font=("Segoe UI", 9), fg="#555", bg=BG).pack(side=LEFT, padx=(8, 0))
+        self.progress = ttk.Progressbar(outer, mode="determinate")
+        self.progress.pack(fill=X, pady=4)
+        self._make_log(outer, "실행 로그", 10)
+
+    def _start_cmd_batch(self):
+        if self._worker and self._worker.is_alive():
+            messagebox.showwarning("안내", "이미 실행 중입니다.")
+            return
+        if not getattr(self, "_csv_rows", None):
+            messagebox.showwarning("안내", "먼저 AP CSV를 업로드하세요.")
+            return
+        raw = self.cmd_batch_text.get("1.0", "end") if hasattr(self, "cmd_batch_text") else ""
+        cmds = [ln.strip() for ln in raw.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+        if not cmds:
+            messagebox.showwarning("안내", "전송할 명령을 입력하세요. 한 줄에 하나.")
+            return
+        if not self._require_second_account(getattr(self, "cmd_user2", None), getattr(self, "cmd_pass2", None)):
+            return
+        if not messagebox.askyesno("확인", f"{len(self._csv_rows)} 대 AP에 명령 {len(cmds)}개를 전송할까요?"):
+            return
+        self._stop_flag = False
+        self.cmd_run_btn.config(state=DISABLED)
+        self.cmd_stop_btn.config(state=NORMAL)
+        self.progress["value"] = 0
+        self.progress["maximum"] = len(self._csv_rows)
+        user2 = self.cmd_user2.get().strip()
+        pass2 = self.cmd_pass2.get()
+        rows = list(self._csv_rows)
+        self._log(f"\n===== 명령 전송 {len(rows)} 대 / {len(cmds)} 명령 =====\n")
+        for c in cmds:
+            self._log(f"  CMD {c}\n")
+
+        def work():
+            results = []
+            old = sys.stdout
+            sys.stdout = TextRedirector(self._log_queue)
+            try:
+                for i, row in enumerate(rows, 1):
+                    if self._stop_flag:
+                        self._log_queue.put("사용자 중지\n")
+                        break
+                    self._log_queue.put(f"\n[{i}/{len(rows)}] {row['ip']}\n")
+                    r = process_ap(
+                        ip=row["ip"],
+                        user=row.get("user") or "",
+                        password=row.get("pass") or "",
+                        operation="run_cmds",
+                        new_password=pass2,
+                        standard_password=pass2,
+                        fallback_user=user2,
+                        try_factory=False,
+                        debug=True,
+                        commands=cmds,
+                    )
+                    results.append(r)
+                    self.after(0, lambda v=i: self.progress.config(value=v))
+                    self.after(0, lambda v=i, n=len(rows): self.cmd_status.set(f"진행 {v}/{n}"))
+            except Exception as e:
+                self._log_queue.put(f"예외: {e}\n")
+            finally:
+                sys.stdout = old
+            try:
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                out = RESULTS_CMD / f"result_cmd_{ts}.csv"
+                RESULTS_CMD.mkdir(exist_ok=True)
+                with open(out, "w", encoding="utf-8-sig", newline="") as f:
+                    w = csv.writer(f)
+                    w.writerow(["ip", "status", "message", "model", "serial", "mac"])
+                    for r in results:
+                        w.writerow([r.get("ip"), r.get("status"), r.get("message"), r.get("model"), r.get("serial"), r.get("mac")])
+                keep_latest_results(RESULTS_CMD)
+                self._save_session_log(LOG_CMD, "cmd_batch")
+                ok_n = sum(1 for r in results if r.get("status") == "OK")
+                self._log_queue.put(f"\n===== 완료: 성공 {ok_n}/{len(results)} =====\n결과: {out}\n")
+            except Exception as e:
+                self._log_queue.put(f"결과 저장 실패: {e}\n")
+            self.after(0, lambda: self.cmd_run_btn.config(state=NORMAL))
+            self.after(0, lambda: self.cmd_stop_btn.config(state=DISABLED))
 
         self._worker = threading.Thread(target=work, daemon=True)
         self._worker.start()

@@ -856,6 +856,7 @@ def process_ap(
     standard_password: str = "",
     fallback_user: str = "",
     try_factory: bool = True,
+    commands: list | None = None,
 ) -> dict:
     result = {
         "ip": ip,
@@ -1163,6 +1164,25 @@ def process_ap(
                         print("    " + " / ".join(parts))
                     else:
                         result["message"] = f"{ip} 펌웨어 업데이트가 180초 내에 완료되지 않았습니다."
+
+        elif operation == "run_cmds":
+            cmds = [c.strip() for c in (commands or []) if str(c).strip()]
+            if not cmds:
+                result["message"] = "전송할 명령이 없음"
+            else:
+                outs = []
+                failed = None
+                for cmd in cmds:
+                    print(f"    [CMD] {cmd}")
+                    ok, out = ssh.run(cmd, success_pattern=r"(rkscli|ruckus\(ap-mode\)#)", timeout=20)
+                    text = (out or "").replace("\r", " ").strip()
+                    if text:
+                        print(text)
+                    outs.append(f"{cmd} => {'OK' if ok else 'FAIL'}")
+                    if not ok and failed is None:
+                        failed = cmd
+                result["status"] = "OK" if failed is None else "FAIL"
+                result["message"] = " / ".join(outs) if failed is None else f"실패: {failed}"
 
         else:
             result["message"] = f"지원하지 않는 operation: {operation}"
